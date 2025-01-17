@@ -5,9 +5,12 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "matplotlib>=3.10.0",
     "networkx>=3.4.2",
     "numpy>=2.2.0",
     "polars>=1.17.1",
+    "rustworkx>=0.15.1",
+    "scipy>=1.15.1",
 ]
 
 [dependency-groups]
