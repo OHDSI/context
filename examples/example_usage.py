@@ -8,8 +8,18 @@ concept_ids = [440921,35625043,442564,46270406,604180,4051479,441840,4185197,
 hierarchy_path = "~/data/vocabulary/snomed/CONCEPT_ANCESTOR.csv"
 
 hierarchy = pl.read_csv(hierarchy_path, separator="\t")
-g = Graph(hierarchy)
+hierarchy = hierarchy.with_columns(pl.lit("subsumes").alias("edge_data"))
+filtered_hierarchy = hierarchy.filter(
+    (pl.col("min_levels_of_separation") == 1) &
+    (pl.col("max_levels_of_separation") == 1)
+).select([
+    pl.col('ancestor_concept_id').alias('source'),
+    pl.col('descendant_concept_id').alias('target'),
+    'edge_data'
+])
+
+g = Graph(filtered_hierarchy)
 g.intermediate_subgraph(concept_ids)
 
 g.print_nodes("intermediate")
-g.plot("intermediate")
+g.plot("intermediate", edge_labels=True)

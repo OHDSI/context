@@ -6,20 +6,18 @@ import polars as pl
 
 def create_test_edge_list():
     data = [
-        (1, 2, 1, 1),
-        (2, 3, 1, 1),
-        (1, 3, 2, 2),
-        (2, 4, 1, 1),
-        (2, 5, 1, 1),
-        (3, 7, 1, 1),
-        (5, 6, 1, 1),
-        (6, 7, 1, 1),
+        (1, 2, "subsumes"),
+        (2, 3, "subsumes"),
+        (2, 4, "subsumes"),
+        (2, 5, "subsumes"),
+        (3, 7, "subsumes"),
+        (5, 6, "subsumes"),
+        (6, 7, "subsumes"),
     ]
     schema = [
-        "ancestor_concept_id",
-        "descendant_concept_id",
-        "min_levels_of_separation",
-        "max_levels_of_separation"
+        "source",
+        "target",
+        "edge_data"
     ]
     edge_list = pl.DataFrame(
         data,

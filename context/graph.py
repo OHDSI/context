@@ -14,49 +14,20 @@ class Graph:
         self.full_graph = rx.PyDiGraph()
         self.subgraph = {}
         self.node_map = {}
+        self.node_label = {}
 
         start = time.time()
-        filtered_hierarchy = hierarchy.filter(
-            (pl.col("min_levels_of_separation") == 1) &
-            (pl.col("max_levels_of_separation") == 1)
-        ).select(['ancestor_concept_id', 'descendant_concept_id'])
 
-        for ancestor, descendant in filtered_hierarchy.iter_rows(named=False):
-            if ancestor not in self.node_map:
-                self.node_map[ancestor] = self.full_graph.add_node(ancestor)
-            if descendant not in self.node_map:
-                self.node_map[descendant] = self.full_graph.add_node(descendant)
-            self.full_graph.add_edge(self.node_map[ancestor], self.node_map[descendant], None)
+        for source, target, edge_data in hierarchy.iter_rows(named=False):
+            if source not in self.node_map:
+                self.node_map[source] = self.full_graph.add_node(source)
+            if target not in self.node_map:
+                self.node_map[target] = self.full_graph.add_node(target)
+            self.full_graph.add_edge(self.node_map[source], self.node_map[target], edge_data)
 
         delta = time.time() - start
         print(f"Processed edge list in {delta:.2f} seconds")
         print(repr(self))
-
-    def __to_networkx(self, rustworkx_graph):
-        start = time.time()
-
-        nx_graph = nx.DiGraph()
-        for node_index in rustworkx_graph.node_indexes():
-            nx_graph.add_node(rustworkx_graph[node_index])
-        for source, target in rustworkx_graph.edge_list():
-            nx_graph.add_edge(rustworkx_graph[source], rustworkx_graph[target], data=None)
-
-        delta = time.time() - start
-        print(f"Converted to networkx graph in {delta:.2f} seconds")
-        return nx_graph
-
-    def plot(self, graph_name="full"):
-        if graph_name == "full":
-            rustworkx_graph = self.full_graph
-        elif graph_name in self.subgraph:
-            rustworkx_graph = self.subgraph[graph_name]
-        else:
-            raise ValueError(f"Graph '{graph_name}' not found. Available options are 'full' and subgraphs: {list(self.subgraph.keys())}")
-
-        nx_graph = self.__to_networkx(rustworkx_graph)
-        pos = nx.spring_layout(nx_graph)
-        nx.draw(nx_graph, pos, with_labels=True, node_size=250, node_color="lightblue", font_size=10)
-        plt.show()
 
     def __repr__(self):
         subgraph_info = ", ".join(
@@ -70,12 +41,45 @@ class Graph:
             f"Subgraphs: [{subgraph_info}]"
         )
 
+    def __to_networkx(self, rustworkx_graph):
+        start = time.time()
+
+        nx_graph = nx.DiGraph()
+        for node_index in rustworkx_graph.node_indexes():
+            nx_graph.add_node(rustworkx_graph[node_index])
+        for source, target, edge_data in rustworkx_graph.weighted_edge_list():
+            nx_graph.add_edge(rustworkx_graph[source], rustworkx_graph[target], data=edge_data)
+
+        delta = time.time() - start
+        print(f"Converted to networkx graph in {delta:.2f} seconds")
+        return nx_graph
+
+    def plot(self, graph_name="full", edge_labels=True):
+        if graph_name == "full":
+            rustworkx_graph = self.full_graph
+        elif graph_name in self.subgraph:
+            rustworkx_graph = self.subgraph[graph_name]
+        else:
+            raise ValueError(f"Graph '{graph_name}' not found. Available options are 'full' and subgraphs: {list(self.subgraph.keys())}")
+
+        nx_graph = self.__to_networkx(rustworkx_graph)
+        pos = nx.spring_layout(nx_graph)
+        nx.draw(nx_graph, pos, with_labels=True, node_size=250, node_color="lightblue", font_size=10)
+        if edge_labels:
+            edge_data = nx.get_edge_attributes(nx_graph, 'data')
+            nx.draw_networkx_edge_labels(nx_graph, pos, edge_labels=edge_data)
+        plt.show()
+
     def selective_subgraph(self, concept_ids, name="selective"):
         # todo: a subgraph that only contains the nodes specified in concept_ids and must create new edges between them.
         #  It may be best to use intermediate subgraph as basis.
         return None
 
     def intermediate_subgraph(self, concept_ids, name = "intermediate"):
+        """
+        :param concept_ids: list of concept IDs for which to create a subgraph
+        :param name: custom name of the subgraph
+        """
         start_time = time.time()
 
         subgraph = rx.PyDiGraph()
@@ -96,9 +100,9 @@ class Graph:
             if node_label not in subgraph_node_map:
                 subgraph_node_map[node_label] = subgraph.add_node(node_label)
 
-        for u, v in self.full_graph.edge_list():
+        for u, v, edge_data in self.full_graph.weighted_edge_list():
             if u in seen_nodes and v in seen_nodes:
-                subgraph.add_edge(subgraph_node_map[self.full_graph[u]], subgraph_node_map[self.full_graph[v]], None)
+                subgraph.add_edge(subgraph_node_map[self.full_graph[u]], subgraph_node_map[self.full_graph[v]], edge_data)
 
         self.subgraph[name] = subgraph
         print(f"Created {name} subgraph in {time.time() - start_time:.2f} seconds")
