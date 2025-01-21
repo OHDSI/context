@@ -1,7 +1,6 @@
 import rustworkx as rx
 import networkx as nx
 import time
-import polars as pl
 import matplotlib.pyplot as plt
 
 
@@ -14,7 +13,6 @@ class Graph:
         self.full_graph = rx.PyDiGraph()
         self.subgraph = {}
         self.node_map = {}
-        self.node_label = {}
 
         start = time.time()
 
