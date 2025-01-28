@@ -1,8 +1,9 @@
 import rustworkx as rx
 import networkx as nx
+import igraph as ig
 import time
 import matplotlib.pyplot as plt
-
+from tqdm import tqdm
 
 class Graph:
     def __init__(self, hierarchy):
@@ -12,16 +13,22 @@ class Graph:
         """
         self.full_graph = rx.PyDiGraph()
         self.subgraph = {}
-        self.node_map = {}
 
         start = time.time()
 
+        existing_nodes = {}
         for source, target, edge_data in hierarchy.iter_rows(named=False):
-            if source not in self.node_map:
-                self.node_map[source] = self.full_graph.add_node(source)
-            if target not in self.node_map:
-                self.node_map[target] = self.full_graph.add_node(target)
-            self.full_graph.add_edge(self.node_map[source], self.node_map[target], edge_data)
+            if source not in existing_nodes:
+                source_index = self.full_graph.add_node(source)
+                existing_nodes[source] = source_index
+            else:
+                source_index = existing_nodes[source]
+            if target not in existing_nodes:
+                target_index = self.full_graph.add_node(target)
+                existing_nodes[target] = target_index
+            else:
+                target_index = existing_nodes[target]
+            self.full_graph.add_edge(source_index, target_index, edge_data)
 
         delta = time.time() - start
         print(f"Processed edge list in {delta:.2f} seconds")
@@ -52,6 +59,41 @@ class Graph:
         print(f"Converted to networkx graph in {delta:.2f} seconds")
         return nx_graph
 
+    def __to_igraph(self, rustworkx_graph):
+        start = time.time()
+
+        igraph_graph = ig.Graph(directed=True)
+        node_labels = [rustworkx_graph[node_index] for node_index in rustworkx_graph.node_indexes()]
+        igraph_graph.add_vertices(len(node_labels))
+        igraph_graph.vs['name'] = node_labels
+        label_to_index = {label: index for index, label in enumerate(node_labels)}
+        edges = [(label_to_index[rustworkx_graph[source]], label_to_index[rustworkx_graph[target]], edge_data)
+                 for source, target, edge_data in rustworkx_graph.weighted_edge_list()]
+        igraph_graph.add_edges([(source, target) for source, target, _ in edges])
+        igraph_graph.es['weight'] = [edge_data for _, _, edge_data in edges]
+
+        delta = time.time() - start
+        print(f"Converted to igraph in {delta:.2f} seconds")
+        return igraph_graph
+
+    def __to_rustworkx(self, igraph_graph):
+        start = time.time()
+
+        rustworkx_graph = rx.PyDiGraph()
+        for vertex in tqdm(igraph_graph.vs, desc="Converting nodes to rustworkx graph"):
+            rustworkx_graph.add_node(vertex['name'])
+        for edge in tqdm(igraph_graph.es, desc="Converting edges to rustworkx graph"):
+            source_label = igraph_graph.vs[edge.source]['name']
+            target_label = igraph_graph.vs[edge.target]['name']
+            weight = edge['weight'] if 'weight' in edge.attributes() else None
+            source_rustworkx_index = rustworkx_graph.nodes().index(source_label)
+            target_rustworkx_index = rustworkx_graph.nodes().index(target_label)
+            rustworkx_graph.add_edge(source_rustworkx_index, target_rustworkx_index, weight)
+
+        delta = time.time() - start
+        print(f"Converted to rustworkx in {delta:.2f} seconds")
+        return rustworkx_graph
+
     def plot(self, graph_name="full", edge_labels=True):
         if graph_name == "full":
             rustworkx_graph = self.full_graph
@@ -73,37 +115,24 @@ class Graph:
         #  It may be best to use intermediate subgraph as basis.
         return None
 
-    def intermediate_subgraph(self, concept_ids, name = "intermediate"):
-        """
-        :param concept_ids: list of concept IDs for which to create a subgraph
-        :param name: custom name of the subgraph
-        """
+    def intermediate_subgraph(self, nodes, name="intermediate"):
         start_time = time.time()
 
-        subgraph = rx.PyDiGraph()
-        seen_nodes = set()
-        subgraph_node_map = {}
+        igraph_full = self.__to_igraph(self.full_graph)
+        valid_node_indices = []
+        for v in tqdm(igraph_full.vs, desc=f"Collecting valid node indices for {name} subgraph"):
+            if v['name'] in nodes:
+                valid_node_indices.append(v.index)
+        all_relevant_indices = set()
+        for index in tqdm(valid_node_indices, desc=f"Finding ancestor nodes for {name} subgraph"):
+            ancestors = igraph_full.subcomponent(index, mode="in")
+            all_relevant_indices.update(ancestors)
+        igraph_subgraph = igraph_full.induced_subgraph(list(all_relevant_indices))
+        rustworkx_subgraph = self.__to_rustworkx(igraph_subgraph)
 
-        for u in concept_ids:
-            u_index = self.node_map[u]
-            for v in concept_ids:
-                if u != v:
-                    v_index = self.node_map[v]
-                    all_paths = list(rx.all_simple_paths(self.full_graph, u_index, v_index))
-                    for path in all_paths:
-                        seen_nodes.update(path)
-
-        for node_index in seen_nodes:
-            node_label = self.full_graph[node_index]
-            if node_label not in subgraph_node_map:
-                subgraph_node_map[node_label] = subgraph.add_node(node_label)
-
-        for u, v, edge_data in self.full_graph.weighted_edge_list():
-            if u in seen_nodes and v in seen_nodes:
-                subgraph.add_edge(subgraph_node_map[self.full_graph[u]], subgraph_node_map[self.full_graph[v]], edge_data)
-
-        self.subgraph[name] = subgraph
+        self.subgraph[name] = rustworkx_subgraph
         print(f"Created {name} subgraph in {time.time() - start_time:.2f} seconds")
+        print(repr(self))
 
     def print_nodes(self, graph_name="full"):
         graph = (
@@ -115,4 +144,4 @@ class Graph:
             print(f"No graph named '{graph_name}' found.")
             return
         node_list = [str(node) for node in graph.nodes()]
-        print(f"Nodes in {graph_name} graph: [{', '.join(node_list)}]")
+        print(f"Nodes in {graph_name} graph ({graph.num_nodes()}): [{', '.join(node_list)}]")

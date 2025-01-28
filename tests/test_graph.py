@@ -1,18 +1,16 @@
 from context.graph import Graph
-
-import matplotlib.pyplot as plt
 import rustworkx as rx
 import polars as pl
 
-def create_test_edge_list():
+def get_dummy_data():
     data = [
-        (1, 2, "subsumes"),
-        (2, 3, "subsumes"),
-        (2, 4, "subsumes"),
-        (2, 5, "subsumes"),
-        (3, 7, "subsumes"),
-        (5, 6, "subsumes"),
-        (6, 7, "subsumes"),
+        ("A", "B", "subsumes"),
+        ("B", "C", "subsumes"),
+        ("B", "D", "subsumes"),
+        ("B", "E", "subsumes"),
+        ("C", "G", "subsumes"),
+        ("E", "F", "subsumes"),
+        ("F", "G", "subsumes"),
     ]
     schema = [
         "source",
@@ -27,16 +25,16 @@ def create_test_edge_list():
     return edge_list
 
 def test_create_full_graph():
-    edge_list = create_test_edge_list()
+    edge_list = get_dummy_data()
     g = Graph(edge_list)
     assert isinstance(g.full_graph, rx.PyDiGraph), "Graph is not a directed graph"
-    assert len(g.full_graph.edge_list()) == 7, "Number of edges is not 7"
-    assert len(g.full_graph.nodes()) == 7, "Number of nodes is not 7"
+    assert g.full_graph.num_nodes() == 7, "Number of nodes is not 7"
+    assert g.full_graph.num_edges() == 7, "Number of edges is not 7"
 
 def test_create_intermediate_subgraph():
-    concept_ids = [1, 3, 5, 7]
-    edge_list = create_test_edge_list()
+    concept_ids = ["A", "C", "E", "G"]
+    edge_list = get_dummy_data()
     g = Graph(edge_list)
     g.intermediate_subgraph(concept_ids)
-    assert len(g.subgraph['intermediate'].nodes()) == 6, "Number of edges is not 4"
-    assert len(g.subgraph['intermediate'].edge_list()) == 6, "Number of edges is not 6"
+    assert g.subgraph['intermediate'].num_nodes() == 6, "Number of nodes is not 6"
+    assert g.subgraph['intermediate'].num_edges() == 6, "Number of edges is not 6"

@@ -15,13 +15,16 @@ name = "context"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "hypll" },
+    { name = "igraph" },
     { name = "matplotlib" },
     { name = "networkx" },
-    { name = "numpy" },
     { name = "polars" },
     { name = "rustworkx" },
     { name = "scipy" },
+    { name = "simple-parsing" },
     { name = "torch" },
+    { name = "tqdm" },
 ]
 
 [package.dev-dependencies]
@@ -31,13 +34,16 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "hypll", specifier = ">=0.1.1" },
+    { name = "igraph", specifier = ">=0.11.8" },
     { name = "matplotlib", specifier = ">=3.10.0" },
     { name = "networkx", specifier = ">=3.4.2" },
-    { name = "numpy", specifier = ">=2.2.0" },
     { name = "polars", specifier = ">=1.17.1" },
     { name = "rustworkx", specifier = ">=0.15.1" },
     { name = "scipy", specifier = ">=1.15.1" },
+    { name = "simple-parsing", specifier = ">=0.1.7" },
     { name = "torch", specifier = ">=2.5.1" },
+    { name = "tqdm", specifier = ">=4.67.1" },
 ]
 
 [package.metadata.requires-dev]
@@ -74,6 +80,15 @@ wheels = [
 ]
 
 [[package]]
+name = "docstring-parser"
+version = "0.16"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/08/12/9c22a58c0b1e29271051222d8906257616da84135af9ed167c9e28f85cb3/docstring_parser-0.16.tar.gz", hash = "sha256:538beabd0af1e2db0146b6bd3caa526c35a34d61af9fd2887f3a8a27a739aa6e", size = 26565 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/7c/e9fcff7623954d86bdc17782036cbf715ecab1bec4847c008557affe1ca8/docstring_parser-0.16-py3-none-any.whl", hash = "sha256:bf0a1387354d3691d102edef7ec124f219ef639982d096e26e3b60aeffa90637", size = 36533 },
+]
+
+[[package]]
 name = "filelock"
 version = "3.16.1"
 source = { registry = "https://pypi.org/simple" }
@@ -106,6 +121,39 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ee/11/de70dee31455c546fbc88301971ec03c328f3d1138cfba14263f651e9551/fsspec-2024.12.0.tar.gz", hash = "sha256:670700c977ed2fb51e0d9f9253177ed20cbde4a3e5c0283cc5385b5870c8533f", size = 291600 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/de/86/5486b0188d08aa643e127774a99bac51ffa6cf343e3deb0583956dca5b22/fsspec-2024.12.0-py3-none-any.whl", hash = "sha256:b520aed47ad9804237ff878b504267a3b0b441e97508bd6d2d8774e3db85cee2", size = 183862 },
+]
+
+[[package]]
+name = "hypll"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f4/16/68078fde03689d2d64067d25b6a0bb68299858ccd1dd70ee79d34fab02f4/hypll-0.1.1.tar.gz", hash = "sha256:6d76aa088c9ad33f48ec0dbec5cf3ec5bb4bfa60b64104e740aa0d7a24a087ec", size = 24406 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/79/a4/5792c8e4c45c1aa53f83f1a2ddf395f8812c65499bab114c45392cce8b40/hypll-0.1.1-py3-none-any.whl", hash = "sha256:633943828aba9864fc0504f4c14949f902afdfdf48736c3cde055a0faf95781b", size = 34636 },
+]
+
+[[package]]
+name = "igraph"
+version = "0.11.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "texttable" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b8/8e/8810c9ccdef97c614423ca82fca693608db9546a1a9716671035e3630499/igraph-0.11.8.tar.gz", hash = "sha256:d7dc1404567ba3b0ea1bf8b5fa6e101617915c8ad11ea5a9f925a40bf4adad7d", size = 4568774 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/24/f4/0c39bd163de47bf2e293813a9b4ae61e34575142dde2b744151c872f9da9/igraph-0.11.8-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:92c47ceb9f4c95ff7461cd94eaec55e901dbc59f6e51f4244d2dd064f31c5491", size = 1948579 },
+    { url = "https://files.pythonhosted.org/packages/dd/7e/8ee4e8f03b03feca33bb9dcc730724353ac36cbe7da7b38397f8ae5cd58b/igraph-0.11.8-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:3a2afdb046b602fea71ca18aff6c72165de5002ec38d0dcf1275e34ecd0d9d02", size = 1753346 },
+    { url = "https://files.pythonhosted.org/packages/ea/7d/9d23c0936070f5beb99559c1064c9057374dfa435c7e3b13504d5a2c839e/igraph-0.11.8-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7870fb72fd9e9218940262671fb79baf281ef066aa1cd35adc092ce9ad39a038", size = 2984081 },
+    { url = "https://files.pythonhosted.org/packages/88/b0/210f242123b14d3ff4b36f97410f928e9bf446414c066dc8d3b8c9cad2ab/igraph-0.11.8-cp39-abi3-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:c8108138ad605714761bc6d526feab54074904a99c47dcaabc269ed7b45e7650", size = 3060225 },
+    { url = "https://files.pythonhosted.org/packages/90/61/ec7edb5233ec2dc3d2129d94211801fb46a1c2b9beec40989707c82271f7/igraph-0.11.8-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e2e3abe641622cd9c95eb152c97caa22e68257a524cc1851a099b066f8f5c5f3", size = 3142403 },
+    { url = "https://files.pythonhosted.org/packages/6b/89/09f1d251c48f239238cf75714e8cee8fcaacb3513620e0f59dbf1ef0c51d/igraph-0.11.8-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:b546eaa9461473a65bb56a51672c6aeb898b737d5e86c3efa1b1bf520ee4b031", size = 3893169 },
+    { url = "https://files.pythonhosted.org/packages/e2/90/3e913fd9698fb91f002fc7a96b2c81bdd77bb8f60f7cb3ec922b6e218666/igraph-0.11.8-cp39-abi3-musllinux_1_2_i686.whl", hash = "sha256:178ef859135ac5075a7159e6826a546b7340cf45a01a928c2a0c24c32e3dfa63", size = 4168476 },
+    { url = "https://files.pythonhosted.org/packages/4f/76/35ae678a78bd1d221af92f3ab98bedbce24968d9d096a2ddfde8580fbe5b/igraph-0.11.8-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:a68ae7b6324e9c4cb1d04ce75b6e0f67974433fc7667895f1e25bf4f4c6fd530", size = 4056329 },
+    { url = "https://files.pythonhosted.org/packages/b5/f5/8c79fd8cdb3708cb404a31538c11eec4283e72dfc8cb47307966f0a3af74/igraph-0.11.8-cp39-abi3-win32.whl", hash = "sha256:cc93d2f97f93bf30c2027c31e9e1aa088a3c60cdfeb6b33e0259e4b40b4c5597", size = 1597440 },
+    { url = "https://files.pythonhosted.org/packages/b0/17/621d3a59430851a327421fdbec9ec8494d7fadaffc6dfdd42d4a95accbf2/igraph-0.11.8-cp39-abi3-win_amd64.whl", hash = "sha256:248831a6162130f16909c1f776cc246b48f692339ea4baca489cad4ed8dc0e13", size = 1976778 },
 ]
 
 [[package]]
@@ -478,6 +526,19 @@ wheels = [
 ]
 
 [[package]]
+name = "simple-parsing"
+version = "0.1.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "docstring-parser" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/eb/c5/f1e2fcb3a81085cdf3cfed48b8c8ce0e7cc30c95dee734cbb35d6265336a/simple_parsing-0.1.7.tar.gz", hash = "sha256:225e6b35252d68f7894716101fe3bd7e6dd3d30ab7b1c3c023f77a42dbe1336f", size = 96375 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/9c/e9ea38750027a6de3e3c5e68a19fda0e7b0cd3db8045f30d0f6bc113b911/simple_parsing-0.1.7-py3-none-any.whl", hash = "sha256:5276e6c90c157362dd0173d1eecebe58361a66b457129cc9bba13b78a4e85092", size = 112782 },
+]
+
+[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -496,6 +557,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ca/99/5a5b6f19ff9f083671ddf7b9632028436167cd3d33e11015754e41b249a4/sympy-1.13.1.tar.gz", hash = "sha256:9cebf7e04ff162015ce31c9c6c9144daa34a93bd082f54fd8f12deca4f47515f", size = 7533040 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b2/fe/81695a1aa331a842b582453b605175f419fe8540355886031328089d840a/sympy-1.13.1-py3-none-any.whl", hash = "sha256:db36cdc64bf61b9b24578b6f7bab1ecdd2452cf008f34faa33776680c26d66f8", size = 6189177 },
+]
+
+[[package]]
+name = "texttable"
+version = "1.7.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/dc/0aff23d6036a4d3bf4f1d8c8204c5c79c4437e25e0ae94ffe4bbb55ee3c2/texttable-1.7.0.tar.gz", hash = "sha256:2d2068fb55115807d3ac77a4ca68fa48803e84ebb0ee2340f858107a36522638", size = 12831 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/24/99/4772b8e00a136f3e01236de33b0efda31ee7077203ba5967fcc76da94d65/texttable-1.7.0-py2.py3-none-any.whl", hash = "sha256:72227d592c82b3d7f672731ae73e4d1f88cd8e2ef5b075a7a7f01a23a3743917", size = 10768 },
 ]
 
 [[package]]
@@ -529,6 +599,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/6d/69/d8ada8b6e0a4257556d5b4ddeb4345ea8eeaaef3c98b60d1cca197c7ad8e/torch-2.5.1-cp312-cp312-manylinux2014_aarch64.whl", hash = "sha256:3f4b7f10a247e0dcd7ea97dc2d3bfbfc90302ed36d7f3952b0008d0df264e697", size = 91811673 },
     { url = "https://files.pythonhosted.org/packages/5f/ba/607d013b55b9fd805db2a5c2662ec7551f1910b4eef39653eeaba182c5b2/torch-2.5.1-cp312-cp312-win_amd64.whl", hash = "sha256:73e58e78f7d220917c5dbfad1a40e09df9929d3b95d25e57d9f8558f84c9a11c", size = 203046841 },
     { url = "https://files.pythonhosted.org/packages/57/6c/bf52ff061da33deb9f94f4121fde7ff3058812cb7d2036c97bc167793bd1/torch-2.5.1-cp312-none-macosx_11_0_arm64.whl", hash = "sha256:8c712df61101964eb11910a846514011f0b6f5920c55dbf567bff8a34163d5b1", size = 63858109 },
+]
+
+[[package]]
+name = "tqdm"
+version = "4.67.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a8/4b/29b4ef32e036bb34e4ab51796dd745cdba7ed47ad142a9f4a1eb8e0c744d/tqdm-4.67.1.tar.gz", hash = "sha256:f8aef9c52c08c13a65f30ea34f4e5aac3fd1a34959879d7e59e63027286627f2", size = 169737 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d0/30/dc54f88dd4a2b5dc8a0279bdd7270e735851848b762aeb1c1184ed1f6b14/tqdm-4.67.1-py3-none-any.whl", hash = "sha256:26445eca388f82e72884e0d580d5464cd801a3ea01e63e5601bdff9ba6a48de2", size = 78540 },
 ]
 
 [[package]]
