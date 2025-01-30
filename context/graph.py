@@ -103,7 +103,7 @@ class Graph:
             raise ValueError(f"Graph '{graph_name}' not found. Available options are 'full' and subgraphs: {list(self.subgraph.keys())}")
 
         nx_graph = self.__to_networkx(rustworkx_graph)
-        pos = nx.spring_layout(nx_graph)
+        pos = nx.spring_layout(nx_graph, k=0.5, seed=42)
         nx.draw(nx_graph, pos, with_labels=True, node_size=250, node_color="lightblue", font_size=10)
         if edge_labels:
             edge_data = nx.get_edge_attributes(nx_graph, 'data')
@@ -115,7 +115,7 @@ class Graph:
         #  It may be best to use intermediate subgraph as basis.
         return None
 
-    def intermediate_subgraph(self, nodes, name="intermediate"):
+    def intermediate_subgraph(self, nodes, name="intermediate", root_node=None):
         start_time = time.time()
 
         igraph_full = self.__to_igraph(self.full_graph)
@@ -145,3 +145,32 @@ class Graph:
             return
         node_list = [str(node) for node in graph.nodes()]
         print(f"Nodes in {graph_name} graph ({graph.num_nodes()}): [{', '.join(node_list)}]")
+
+    def find_root_node(self, graph_name="full"):
+        """
+        :param graph_name: The name of the graph to search for the root node in. Defaults to "full" which means the full graph.
+        :return: The label of the single root node.
+        :raises ValueError: If no root nodes or multiple root nodes are found.
+        """
+        if graph_name == "full":
+            rustworkx_graph = self.full_graph
+        elif graph_name in self.subgraph:
+            rustworkx_graph = self.subgraph[graph_name]
+        else:
+            raise ValueError(
+                f"Graph '{graph_name}' not found. Available options are 'full' and subgraphs: {list(self.subgraph.keys())}"
+            )
+
+        root_nodes = []
+
+        for node_index in rustworkx_graph.node_indexes():
+            if rustworkx_graph.in_degree(node_index) == 0 and rustworkx_graph.out_degree(node_index) > 0:
+                root_nodes.append(rustworkx_graph[node_index])
+
+        if len(root_nodes) == 0:
+            raise ValueError("No root nodes found.")
+        elif len(root_nodes) > 1:
+            raise ValueError(f"Multiple root nodes found: {', '.join(map(str, root_nodes))}")
+
+        print(f"Root node: {root_nodes[0]}")
+        return root_nodes[0]
