@@ -1,4 +1,5 @@
 from context.dataset import GraphEmbeddingDataset
+from torch.utils.data import DataLoader
 import torch
 import pytest
 
@@ -51,6 +52,21 @@ def test_get_item(dummy_graph):
     dataset = GraphEmbeddingDataset(dummy_graph, device=torch.device('cpu'), num_negative_samples=3)
     idx = 2
     edges, labels = dataset[idx]
+    # print(f"Edges: {edges}")
+    # print(f"Labels: {labels}")
     assert len(labels) == 4, "Not four elements"
     assert labels[0] == True, "First element not True"
     assert labels[1:].all() == False, "Second to last elements not False"
+
+def test_dataloader(dummy_graph):
+    batch_size = 4
+    num_negative_samples = 3
+    dataset = GraphEmbeddingDataset(dummy_graph, device=torch.device('cpu'), num_negative_samples=num_negative_samples)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    for batch in dataloader:
+        edges, labels = batch
+        # print(f"Batch edges: {edges}")
+        # print(f"Batch labels: {labels}")
+        assert len(edges) == 4, f"Expected batch size of 4, but got {len(edges)}"
+        assert len(labels) == 4, f"Expected label batch size of 4, but got {len(labels)}"
+        break
