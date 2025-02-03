@@ -1,5 +1,5 @@
 from context.dataset import GraphEmbeddingDataset
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, BatchSampler, RandomSampler
 import torch
 import pytest
 
@@ -42,31 +42,27 @@ def test_generate_non_adjacency_sets(dummy_graph):
     for i, actual_set in enumerate(non_adjacency_sets):
         assert actual_set == expected_non_adjacency_sets[i], f"Node {i} has the wrong non-adjacency set: {actual_set}"
 
-def test_negative_samples_insufficient(dummy_graph):
-    dataset = GraphEmbeddingDataset(dummy_graph, device=torch.device('cpu'), num_negative_samples=10)
-    with pytest.raises(ValueError, match="Not enough non-connected nodes to sample"):
-        for idx in range(len(dataset)):
-            edge, labels = dataset[idx]
-
 def test_get_item(dummy_graph):
-    dataset = GraphEmbeddingDataset(dummy_graph, device=torch.device('cpu'), num_negative_samples=3)
-    idx = 2
+    num_negative_samples = 3
+    dataset = GraphEmbeddingDataset(dummy_graph, device=torch.device('cpu'), num_negative_samples=num_negative_samples)
+    idx = [0, 1, 2, 3]
     edges, labels = dataset[idx]
     # print(f"Edges: {edges}")
     # print(f"Labels: {labels}")
-    assert len(labels) == 4, "Not four elements"
-    assert labels[0] == True, "First element not True"
-    assert labels[1:].all() == False, "Second to last elements not False"
+    assert labels.shape[0] >= len(idx), "Not enough edges returned"
+    assert torch.all(labels[:len(idx)] == True).item(), f"First {len(idx)} labels must be True"
+    if labels.shape[0] > len(idx):
+            assert torch.all(labels[len(idx):] == False).item(), "Remaining labels must be False"
 
 def test_dataloader(dummy_graph):
     batch_size = 4
     num_negative_samples = 3
     dataset = GraphEmbeddingDataset(dummy_graph, device=torch.device('cpu'), num_negative_samples=num_negative_samples)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    for batch in dataloader:
-        edges, labels = batch
-        # print(f"Batch edges: {edges}")
-        # print(f"Batch labels: {labels}")
-        assert len(edges) == 4, f"Expected batch size of 4, but got {len(edges)}"
-        assert len(labels) == 4, f"Expected label batch size of 4, but got {len(labels)}"
+    dataloader = DataLoader(dataset, sampler=BatchSampler(sampler=RandomSampler(dataset), batch_size=batch_size,
+                                                          drop_last=False))
+    for edges, labels in dataloader:
+        positive_label_count = labels.bool().sum().item()
+        assert positive_label_count == batch_size, (
+            f"Expected {batch_size} positive labels, got {positive_label_count}"
+        )
         break

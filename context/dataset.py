@@ -47,23 +47,28 @@ class GraphEmbeddingDataset(Dataset):
             non_adjacency_sets[node].discard(node)
         return non_adjacency_sets
 
-    def sample_negative_uniform(self, source_node, num_samples):
-        candidates = torch.tensor(list(self.non_adjacency_sets[source_node]), device=self.device)
-        if len(candidates) < num_samples:
-            raise ValueError("Not enough non-connected nodes to sample the required number of negative samples.")
-        indices = torch.randperm(len(candidates), device=self.device)[:num_samples]
-        sampled_nodes = candidates[indices]
-        return sampled_nodes
+    def sample_negative_uniform(self, batch_size: int):
+        negative_nodes = torch.randint(low=0, high=self.num_nodes,
+                                       size=(batch_size * self.num_negative_samples,),
+                                       device=self.device)
+        return negative_nodes
 
     def __getitem__(self, idx: int):
         batch_rel = self.edges_list[idx]
-        source_node = batch_rel[0].item()
-        positive_target_node = batch_rel[1].item()
-        negative_target_nodes = self.sample_negative_uniform(source_node=source_node,
-                                                             num_samples=self.num_negative_samples)
-        source_nodes_expanded = torch.full((self.num_negative_samples,), source_node, device=self.device)
-        positive_edges = torch.tensor([[source_node, positive_target_node]], device=self.device)
-        negative_edges = torch.stack([source_nodes_expanded, negative_target_nodes], dim=1)
+        source_nodes = batch_rel[:, 0]
+        target_nodes = batch_rel[:, 1]
+        negative_target_nodes =  self.sample_negative_uniform(
+            batch_size=source_nodes.size(0))
+        source_nodes_expanded = source_nodes.unsqueeze(1).expand(-1, self.num_negative_samples).reshape(-1)
+        negative_edge_indices = torch.stack([source_nodes_expanded, negative_target_nodes], dim=0)
+        negative_edge_indices_in_adj = self.adjacency_matrix._indices()
+        adj_edge_keys = negative_edge_indices_in_adj[0] * self.num_nodes + negative_edge_indices_in_adj[1]
+        negative_edge_keys = negative_edge_indices[0] * self.num_nodes + negative_edge_indices[1]
+        mask = ~torch.isin(negative_edge_keys, adj_edge_keys)
+        valid_negative_source_nodes = source_nodes_expanded[mask]
+        valid_negative_target_nodes = negative_target_nodes[mask]
+        positive_edges = torch.stack([source_nodes, target_nodes], dim=1)
+        negative_edges = torch.stack([valid_negative_source_nodes, valid_negative_target_nodes], dim=1)
         positive_labels = torch.ones(positive_edges.size(0), device=self.device)
         negative_labels = torch.zeros(negative_edges.size(0), device=self.device)
         edges = torch.cat([positive_edges, negative_edges], dim=0)

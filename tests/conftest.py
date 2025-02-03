@@ -28,4 +28,5 @@ def dummy_data():
 @pytest.fixture
 def dummy_graph(dummy_data):
     g = Graph(dummy_data)
+    g.plot()
     return g.full_graph

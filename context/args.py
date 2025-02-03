@@ -2,8 +2,12 @@ from dataclasses import dataclass
 
 @dataclass
 class Args:
+    # path to a model file to load a pre-trained model
+    model_file: str = 'poincare_embeddings_snomed.pt'
     # output directory
-    output_directory: str = '/Users/xxx/Desktop'
+    output_directory: str = '/Users/hjohn/Desktop/output/models'
+    # number of models to save
+    save_top: int = 5
     # number of epochs to train for
     epochs: int = 200
     # learning rate
