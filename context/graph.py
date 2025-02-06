@@ -2,6 +2,7 @@ import rustworkx as rx
 import networkx as nx
 import igraph as ig
 import time
+import pickle
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
@@ -46,7 +47,7 @@ class Graph:
             f"Subgraphs: [{subgraph_info}]"
         )
 
-    def __to_networkx(self, rustworkx_graph):
+    def _to_networkx(self, rustworkx_graph):
         start = time.time()
 
         nx_graph = nx.DiGraph()
@@ -59,7 +60,7 @@ class Graph:
         print(f"Converted to networkx graph in {delta:.2f} seconds")
         return nx_graph
 
-    def __to_igraph(self, rustworkx_graph):
+    def _to_igraph(self, rustworkx_graph):
         start = time.time()
 
         igraph_graph = ig.Graph(directed=True)
@@ -76,7 +77,7 @@ class Graph:
         print(f"Converted to igraph in {delta:.2f} seconds")
         return igraph_graph
 
-    def __to_rustworkx(self, igraph_graph):
+    def _to_rustworkx(self, igraph_graph):
         start = time.time()
 
         rustworkx_graph = rx.PyDiGraph()
@@ -102,8 +103,8 @@ class Graph:
         else:
             raise ValueError(f"Graph '{graph_name}' not found. Available options are 'full' and subgraphs: {list(self.subgraph.keys())}")
 
-        nx_graph = self.__to_networkx(rustworkx_graph)
-        pos = nx.spring_layout(nx_graph)
+        nx_graph = self._to_networkx(rustworkx_graph)
+        pos = nx.spring_layout(nx_graph, k=0.5, seed=42)
         nx.draw(nx_graph, pos, with_labels=True, node_size=250, node_color="lightblue", font_size=10)
         if edge_labels:
             edge_data = nx.get_edge_attributes(nx_graph, 'data')
@@ -115,10 +116,10 @@ class Graph:
         #  It may be best to use intermediate subgraph as basis.
         return None
 
-    def intermediate_subgraph(self, nodes, name="intermediate"):
+    def intermediate_subgraph(self, nodes, name="intermediate", root_node=None):
         start_time = time.time()
 
-        igraph_full = self.__to_igraph(self.full_graph)
+        igraph_full = self._to_igraph(self.full_graph)
         valid_node_indices = []
         for v in tqdm(igraph_full.vs, desc=f"Collecting valid node indices for {name} subgraph"):
             if v['name'] in nodes:
@@ -128,7 +129,7 @@ class Graph:
             ancestors = igraph_full.subcomponent(index, mode="in")
             all_relevant_indices.update(ancestors)
         igraph_subgraph = igraph_full.induced_subgraph(list(all_relevant_indices))
-        rustworkx_subgraph = self.__to_rustworkx(igraph_subgraph)
+        rustworkx_subgraph = self._to_rustworkx(igraph_subgraph)
 
         self.subgraph[name] = rustworkx_subgraph
         print(f"Created {name} subgraph in {time.time() - start_time:.2f} seconds")
@@ -145,3 +146,74 @@ class Graph:
             return
         node_list = [str(node) for node in graph.nodes()]
         print(f"Nodes in {graph_name} graph ({graph.num_nodes()}): [{', '.join(node_list)}]")
+
+    def find_root_node(self, graph_name="full"):
+        if graph_name == "full":
+            rustworkx_graph = self.full_graph
+        elif graph_name in self.subgraph:
+            rustworkx_graph = self.subgraph[graph_name]
+        else:
+            raise ValueError(
+                f"Graph '{graph_name}' not found. Available options are 'full' and subgraphs: {list(self.subgraph.keys())}"
+            )
+        root_nodes = []
+        for node_index in rustworkx_graph.node_indexes():
+            if rustworkx_graph.in_degree(node_index) == 0 and rustworkx_graph.out_degree(node_index) > 0:
+                root_nodes.append(rustworkx_graph[node_index])
+        if len(root_nodes) == 0:
+            raise ValueError("No root nodes found.")
+        elif len(root_nodes) > 1:
+            raise ValueError(f"Multiple root nodes found: {', '.join(map(str, root_nodes))}")
+
+        print(f"Root node: {root_nodes[0]}")
+        return root_nodes[0]
+
+    def save(self, file_path):
+        data = {
+            "full_graph": {
+                "nodes": [self.full_graph[node_idx] for node_idx in self.full_graph.node_indexes()],
+                "edges": [
+                    (self.full_graph[source], self.full_graph[target], edge_data)
+                    for source, target, edge_data in self.full_graph.weighted_edge_list()
+                ],
+            },
+            "subgraphs": {
+                name: {
+                    "nodes": [sub[node_idx] for node_idx in sub.node_indexes()],
+                    "edges": [
+                        (sub[source], sub[target], edge_data)
+                        for source, target, edge_data in sub.weighted_edge_list()
+                    ],
+                }
+                for name, sub in self.subgraph.items()
+            },
+        }
+        with open(file_path, "wb") as f:
+            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    @classmethod
+    def load(cls, file_path):
+        with open(file_path, "rb") as f:
+            data = pickle.load(f)
+        inst = cls.__new__(cls)
+
+        inst.full_graph = rx.PyDiGraph()
+        node_map = {}
+        for node in data["full_graph"]["nodes"]:
+            new_index = inst.full_graph.add_node(node)
+            node_map[node] = new_index
+        for src, tgt, edge_data in data["full_graph"]["edges"]:
+            inst.full_graph.add_edge(node_map[src], node_map[tgt], edge_data)
+
+        inst.subgraph = {}
+        for name, sgdata in data["subgraphs"].items():
+            sub = rx.PyDiGraph()
+            sub_node_map = {}
+            for node in sgdata["nodes"]:
+                new_index = sub.add_node(node)
+                sub_node_map[node] = new_index
+            for src, tgt, edge_data in sgdata["edges"]:
+                sub.add_edge(sub_node_map[src], sub_node_map[tgt], edge_data)
+            inst.subgraph[name] = sub
+
+        return inst
