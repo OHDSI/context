@@ -47,7 +47,7 @@ class Graph:
             f"Subgraphs: [{subgraph_info}]"
         )
 
-    def __to_networkx(self, rustworkx_graph):
+    def _to_networkx(self, rustworkx_graph):
         start = time.time()
 
         nx_graph = nx.DiGraph()
@@ -60,7 +60,7 @@ class Graph:
         print(f"Converted to networkx graph in {delta:.2f} seconds")
         return nx_graph
 
-    def __to_igraph(self, rustworkx_graph):
+    def _to_igraph(self, rustworkx_graph):
         start = time.time()
 
         igraph_graph = ig.Graph(directed=True)
@@ -77,7 +77,7 @@ class Graph:
         print(f"Converted to igraph in {delta:.2f} seconds")
         return igraph_graph
 
-    def __to_rustworkx(self, igraph_graph):
+    def _to_rustworkx(self, igraph_graph):
         start = time.time()
 
         rustworkx_graph = rx.PyDiGraph()
@@ -103,7 +103,7 @@ class Graph:
         else:
             raise ValueError(f"Graph '{graph_name}' not found. Available options are 'full' and subgraphs: {list(self.subgraph.keys())}")
 
-        nx_graph = self.__to_networkx(rustworkx_graph)
+        nx_graph = self._to_networkx(rustworkx_graph)
         pos = nx.spring_layout(nx_graph, k=0.5, seed=42)
         nx.draw(nx_graph, pos, with_labels=True, node_size=250, node_color="lightblue", font_size=10)
         if edge_labels:
@@ -119,7 +119,7 @@ class Graph:
     def intermediate_subgraph(self, nodes, name="intermediate", root_node=None):
         start_time = time.time()
 
-        igraph_full = self.__to_igraph(self.full_graph)
+        igraph_full = self._to_igraph(self.full_graph)
         valid_node_indices = []
         for v in tqdm(igraph_full.vs, desc=f"Collecting valid node indices for {name} subgraph"):
             if v['name'] in nodes:
@@ -129,7 +129,7 @@ class Graph:
             ancestors = igraph_full.subcomponent(index, mode="in")
             all_relevant_indices.update(ancestors)
         igraph_subgraph = igraph_full.induced_subgraph(list(all_relevant_indices))
-        rustworkx_subgraph = self.__to_rustworkx(igraph_subgraph)
+        rustworkx_subgraph = self._to_rustworkx(igraph_subgraph)
 
         self.subgraph[name] = rustworkx_subgraph
         print(f"Created {name} subgraph in {time.time() - start_time:.2f} seconds")
@@ -148,11 +148,6 @@ class Graph:
         print(f"Nodes in {graph_name} graph ({graph.num_nodes()}): [{', '.join(node_list)}]")
 
     def find_root_node(self, graph_name="full"):
-        """
-        :param graph_name: The name of the graph to search for the root node in. Defaults to "full" which means the full graph.
-        :return: The label of the single root node.
-        :raises ValueError: If no root nodes or multiple root nodes are found.
-        """
         if graph_name == "full":
             rustworkx_graph = self.full_graph
         elif graph_name in self.subgraph:
@@ -161,13 +156,10 @@ class Graph:
             raise ValueError(
                 f"Graph '{graph_name}' not found. Available options are 'full' and subgraphs: {list(self.subgraph.keys())}"
             )
-
         root_nodes = []
-
         for node_index in rustworkx_graph.node_indexes():
             if rustworkx_graph.in_degree(node_index) == 0 and rustworkx_graph.out_degree(node_index) > 0:
                 root_nodes.append(rustworkx_graph[node_index])
-
         if len(root_nodes) == 0:
             raise ValueError("No root nodes found.")
         elif len(root_nodes) > 1:
@@ -177,9 +169,6 @@ class Graph:
         return root_nodes[0]
 
     def save(self, file_path):
-        """
-        Save the full graph and all subgraphs to file.
-        """
         data = {
             "full_graph": {
                 "nodes": [self.full_graph[node_idx] for node_idx in self.full_graph.node_indexes()],
@@ -204,15 +193,10 @@ class Graph:
 
     @classmethod
     def load(cls, file_path):
-        """
-        Load and return a Graph object from a file.
-        """
         with open(file_path, "rb") as f:
             data = pickle.load(f)
-        # Create an instance without calling the original __init__
         inst = cls.__new__(cls)
 
-        # Reconstruct the full graph
         inst.full_graph = rx.PyDiGraph()
         node_map = {}
         for node in data["full_graph"]["nodes"]:
@@ -221,7 +205,6 @@ class Graph:
         for src, tgt, edge_data in data["full_graph"]["edges"]:
             inst.full_graph.add_edge(node_map[src], node_map[tgt], edge_data)
 
-        # Reconstruct all subgraphs
         inst.subgraph = {}
         for name, sgdata in data["subgraphs"].items():
             sub = rx.PyDiGraph()

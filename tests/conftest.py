@@ -1,6 +1,5 @@
 import pytest
 import polars as pl
-import torch
 
 from context.graph import Graph
 from context.dataset import GraphEmbeddingDataset
@@ -68,5 +67,5 @@ def dummy_graph_large(dummy_data_large):
 @pytest.fixture
 def dummy_dataset(dummy_graph_large):
     num_negative_samples = 3
-    dataset = GraphEmbeddingDataset(dummy_graph_large, device=torch.device('cpu'), num_negative_samples=num_negative_samples)
+    dataset = GraphEmbeddingDataset(dummy_graph_large, num_negative_samples=num_negative_samples)
     return dataset

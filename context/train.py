@@ -1,17 +1,15 @@
 from argparse import Namespace
 import csv
-from pathlib import Path
 import pathlib
 
 from hypll.manifolds.poincare_ball import Curvature, PoincareBall
 from hypll.optim import RiemannianSGD, RiemannianAdam
-import polars as pl
-import simple_parsing
 import torch
 from torch.utils.data import DataLoader, BatchSampler, RandomSampler
 from tqdm import tqdm
+import polars as pl
+import numpy as np
 
-from context.args import Args
 from context.dataset import GraphEmbeddingDataset
 from context.eval import evaluate_model
 from context.graph import Graph
@@ -26,9 +24,7 @@ def train(args: Namespace):
         if g.subgraph[args.graph_id][node_index] == args.root_node_label
     )
 
-    dataset = GraphEmbeddingDataset(graph=g.subgraph[args.graph_id],
-                                    # device=args.device,
-                                    num_negative_samples = args.negative_samples)
+    dataset = GraphEmbeddingDataset(graph=g.subgraph[args.graph_id], num_negative_samples = args.negative_samples)
     dataloader = DataLoader(dataset, sampler=BatchSampler(sampler=RandomSampler(dataset), batch_size=args.batch_size,
                                                           drop_last=False))
 
@@ -80,7 +76,10 @@ def train(args: Namespace):
         lr=args.learning_rate# ,
         # weight_decay=1e-4
     )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=1000)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+                                                           mode='min',
+                                                           factor=args.lr_reduce_factor,
+                                                           patience=args.lr_reduce_patience)
     early_stopper = EarlyStopper(patience=1000)
     loss_per_epoch = torch.empty(args.epochs, device=args.device)
     best_loss = float('inf')
@@ -112,46 +111,45 @@ def train(args: Namespace):
         print(f"Epoch {epoch} loss: {average_loss} lr: {scheduler.get_last_lr()}")
         loss_per_epoch[epoch] = average_loss
 
-    model.load_state_dict(torch.load(output_directory.joinpath(f"epoch:{best_epoch}-loss:{best_loss:3f}-{args.model_file}"))['state_dict'])
+    model.load_state_dict(
+        torch.load(output_directory.joinpath("models", f"epoch:{best_epoch}-loss:{best_loss:3f}-{args.model_file}"))[
+            'state_dict'])
 
     weights_np = model.weight.data.cpu().numpy()
-
-    tsv_file_path = "/Users/hjohn/Desktop/output/vec.tsv"
-    with open(tsv_file_path, mode='w', newline='') as file:
+    vec_file_path = output_directory.joinpath("vec.tsv")
+    with open(vec_file_path, mode='w', newline='') as file:
         writer = csv.writer(file, delimiter='\t')
         for row in weights_np:
             writer.writerow(row)
 
-    concept_dict = {}
-    csv_path = "/Users/hjohn/data/vocabulary/snomed/CONCEPT.csv"
-    with open(csv_path, mode='r', newline='', encoding='utf-8') as file:
-        reader = csv.DictReader(file, delimiter='\t')
-        for row in reader:
-            concept_id = int(row['concept_id'])
-            concept_name = row['concept_name']
-            concept_dict[concept_id] = concept_name
+    csv_path = args.concept_map
+    concept_df = pl.read_csv(csv_path, separator="\t", quote_char=None)
+    concept_dict = dict(zip(
+        concept_df["concept_id"].cast(pl.Int64).to_list(),
+        concept_df["concept_name"].to_list()
+    ))
 
-    labels_file_path = "/Users/hjohn/Desktop/output/labels.tsv"
-    with open(labels_file_path, 'w', newline='') as labels_file:
-        writer = csv.writer(labels_file, delimiter='\t')
-        for index, node_id in enumerate(g.subgraph["intermediate"].nodes()):
-            concept_name = concept_dict[node_id]
-            writer.writerow([concept_name])
+    labels = [concept_dict[node_id] for node_id in g.subgraph[args.graph_id].nodes()]
+    df_labels = pl.DataFrame({"label": labels})
+    labels_file_path = output_directory.joinpath("labels.tsv")
+    df_labels.write_csv(str(labels_file_path), separator="\t", include_header=False)
 
-    # mean_rank, map_score = evaluate_model(model, dataset)
+    mean_rank, map_score = evaluate_model(model, dataset)
     # save rank and map as txt file
-    # savetxt(output_directory.joinpath(f"mean-rank:{mean_rank}_map:{map_score}.txt"), [mean_rank, map_score])
+    np.savetxt(output_directory.joinpath(f"mean-rank:{mean_rank}_map:{map_score}.txt"), [mean_rank, map_score])
 
 # def save_for_plp(embeddings, dataset, args):
 #     concept_ids = torch.as_tensor(list(nx.get_node_attributes(dataset.graph, 'concept_id').values()), dtype=torch.long)
 #     torch.save({'concept_ids': concept_ids, 'embeddings': embeddings}, 'poincare_embeddings_snomed_plp.pt')
 
 def save_model(model, args, output_directory, epoch, average_loss, loss_per_epoch):
+    models_dir = output_directory.joinpath("models")
+    models_dir.mkdir(parents=True, exist_ok=True)
     # only keep top args.save_top models
-    saved_models = len(list(output_directory.glob(f"epoch:*-{args.model_file}")))
+    saved_models = len(list(models_dir.glob(f"epoch:*-{args.model_file}")))
     while saved_models >= args.save_top:
-        # find worst loss value from filename of saved models
-        candidate_models = list(output_directory.glob(f"epoch:*-{args.model_file}"))
+        # find the worst loss value from filename of saved models
+        candidate_models = list(models_dir.glob(f"epoch:*-{args.model_file}"))
         losses = [float(model.name.split('-')[1].split('-')[0].split(':')[1]) for model in candidate_models]
         worst_loss = max(losses)
         worst_model = [model for model in candidate_models if float(model.name.split('-')[1].split('-')[0].split(':')[1]) == worst_loss][0]
@@ -163,4 +161,4 @@ def save_model(model, args, output_directory, epoch, average_loss, loss_per_epoc
             'args': args.__dict__, # convert dataclass to dict
             'losses': loss_per_epoch,
             'epoch': epoch,
-            }, output_directory.joinpath(f"epoch:{epoch}-loss:{average_loss:3f}-{args.model_file}"))
+            }, models_dir.joinpath(f"epoch:{epoch}-loss:{average_loss:3f}-{args.model_file}"))

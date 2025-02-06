@@ -78,15 +78,17 @@ def evaluate_mean_rank_and_map(dataset, embeddings, num_nodes, batch_size=128):
     average_precisions = torch.empty(num_edges, dtype=torch.float32, device=device)
 
     # Convert embeddings to double precision for numerical stability
-    embeddings = embeddings.to(dtype=torch.double)
+    # Choose dtype based on device: use float32 for MPS, else float64
+    dtype = torch.float32 if embeddings.device.type == "mps" else torch.float64
+    embeddings = embeddings.to(dtype=dtype)
 
     for i in tqdm(range(0, num_edges, batch_size)):
         batch_edges = edges_list[i:i + batch_size]
         batch_size_actual = batch_edges.size(0)
 
         # Get source nodes and target nodes
-        u_nodes = batch_edges[:, 0]  # Shape: [batch_size_actual]
-        v_nodes = batch_edges[:, 1]  # Shape: [batch_size_actual]
+        u_nodes = batch_edges[:, 0].to(device)  # Shape: [batch_size_actual]
+        v_nodes = batch_edges[:, 1].to(device)  # Shape: [batch_size_actual]
 
         u_embeddings = embeddings[u_nodes]  # Shape: [batch_size_actual, embedding_dim]
 
@@ -125,7 +127,7 @@ def evaluate_mean_rank_and_map(dataset, embeddings, num_nodes, batch_size=128):
         # For MAP, we need to compute average precision for each example
         # Create labels: 1 for positive v_node, 0 for others
         labels = torch.zeros_like(distances, dtype=torch.int64, device=device)
-        labels[torch.arange(batch_size_actual), v_nodes] = 1
+        labels[torch.arange(batch_size_actual, device=device), v_nodes] = 1
         # After sorting, obtain sorted labels
         sorted_labels = torch.gather(labels, 1, sorted_indices)
         # Compute average precision for each u_node
