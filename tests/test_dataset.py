@@ -1,11 +1,10 @@
 from context.dataset import GraphEmbeddingDataset
 from torch.utils.data import DataLoader, BatchSampler, RandomSampler
 import torch
-import pytest
 
 def test_adjacency_matrix(dummy_graph):
     dataset = GraphEmbeddingDataset(dummy_graph)
-    adj_matrix = dataset.adjacency_matrix
+    adj_matrix = dataset.directed_adjacency_matrix
     edges_list = dataset.edges_list.cpu().numpy()
     dense_adj_matrix = adj_matrix.to_dense()
     for edge in edges_list:
@@ -44,8 +43,8 @@ def test_generate_non_adjacency_sets(dummy_graph):
 
 def test_get_item(dummy_graph):
     num_negative_samples = 3
-    dataset = GraphEmbeddingDataset(dummy_graph, device=torch.device('cpu'), num_negative_samples=num_negative_samples)
-    idx = [0, 1, 2, 3]
+    dataset = GraphEmbeddingDataset(dummy_graph, device=torch.device('cpu'), num_negative_samples=num_negative_samples, directed=False)
+    idx = [0, 1, 2]
     edges, labels = dataset[idx]
     # print(f"Edges: {edges}")
     # print(f"Labels: {labels}")
@@ -54,14 +53,16 @@ def test_get_item(dummy_graph):
     if labels.shape[0] > len(idx):
             assert torch.all(labels[len(idx):] == False).item(), "Remaining labels must be False"
 
-def test_dataloader(dummy_graph):
-    batch_size = 4
-    num_negative_samples = 3
-    dataset = GraphEmbeddingDataset(dummy_graph, device=torch.device('cpu'), num_negative_samples=num_negative_samples)
+def test_dataloader(dummy_graph_large):
+    batch_size = 8
+    num_negative_samples = 10
+    dataset = GraphEmbeddingDataset(dummy_graph_large, num_negative_samples=num_negative_samples)
     dataloader = DataLoader(dataset, sampler=BatchSampler(sampler=RandomSampler(dataset), batch_size=batch_size,
                                                           drop_last=False))
     for edges, labels in dataloader:
         positive_label_count = labels.bool().sum().item()
+        # print(f"Edges: {edges}")
+        # print(f"Labels: {labels}")
         assert positive_label_count == batch_size, (
             f"Expected {batch_size} positive labels, got {positive_label_count}"
         )

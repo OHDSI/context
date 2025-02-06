@@ -2,6 +2,7 @@ import rustworkx as rx
 import networkx as nx
 import igraph as ig
 import time
+import pickle
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
@@ -174,3 +175,62 @@ class Graph:
 
         print(f"Root node: {root_nodes[0]}")
         return root_nodes[0]
+
+    def save(self, file_path):
+        """
+        Save the full graph and all subgraphs to file.
+        """
+        data = {
+            "full_graph": {
+                "nodes": [self.full_graph[node_idx] for node_idx in self.full_graph.node_indexes()],
+                "edges": [
+                    (self.full_graph[source], self.full_graph[target], edge_data)
+                    for source, target, edge_data in self.full_graph.weighted_edge_list()
+                ],
+            },
+            "subgraphs": {
+                name: {
+                    "nodes": [sub[node_idx] for node_idx in sub.node_indexes()],
+                    "edges": [
+                        (sub[source], sub[target], edge_data)
+                        for source, target, edge_data in sub.weighted_edge_list()
+                    ],
+                }
+                for name, sub in self.subgraph.items()
+            },
+        }
+        with open(file_path, "wb") as f:
+            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    @classmethod
+    def load(cls, file_path):
+        """
+        Load and return a Graph object from a file.
+        """
+        with open(file_path, "rb") as f:
+            data = pickle.load(f)
+        # Create an instance without calling the original __init__
+        inst = cls.__new__(cls)
+
+        # Reconstruct the full graph
+        inst.full_graph = rx.PyDiGraph()
+        node_map = {}
+        for node in data["full_graph"]["nodes"]:
+            new_index = inst.full_graph.add_node(node)
+            node_map[node] = new_index
+        for src, tgt, edge_data in data["full_graph"]["edges"]:
+            inst.full_graph.add_edge(node_map[src], node_map[tgt], edge_data)
+
+        # Reconstruct all subgraphs
+        inst.subgraph = {}
+        for name, sgdata in data["subgraphs"].items():
+            sub = rx.PyDiGraph()
+            sub_node_map = {}
+            for node in sgdata["nodes"]:
+                new_index = sub.add_node(node)
+                sub_node_map[node] = new_index
+            for src, tgt, edge_data in sgdata["edges"]:
+                sub.add_edge(sub_node_map[src], sub_node_map[tgt], edge_data)
+            inst.subgraph[name] = sub
+
+        return inst

@@ -7,7 +7,8 @@ class GraphEmbeddingDataset(Dataset):
             self,
             graph: rx.PyDiGraph,
             device: torch.device = torch.device("cpu"),
-            num_negative_samples: int = 10):
+            num_negative_samples: int = 10,
+            directed: bool = False):
         super().__init__()
 
         self.edges_list = torch.as_tensor(list(graph.edge_list()), device=device)
@@ -16,13 +17,15 @@ class GraphEmbeddingDataset(Dataset):
         self.num_edges = graph.num_edges()
         self.num_negative_samples = num_negative_samples
         self.adjacency_sets = self.generate_adjacency_sets()
-        self.non_adjacency_sets = self.generate_non_adjacency_sets()
-        self.adjacency_matrix = self.create_sparse_adjacency_matrix()
+        # self.non_adjacency_sets = self.generate_non_adjacency_sets()
+        self.directed_adjacency_matrix = self.create_directed_sparse_adjacency_matrix()
+        self.undirected_adjacency_matrix = self.create_undirected_adjacency_matrix()
+        self.directed = directed
 
     def __len__(self) -> int:
         return self.num_edges
 
-    def create_sparse_adjacency_matrix(self):
+    def create_directed_sparse_adjacency_matrix(self):
         values = torch.ones(size=(self.edges_list.shape[0],), dtype=torch.float32, device=self.device)
         adjacency_matrix = torch.sparse_coo_tensor(
             indices=self.edges_list.T,
@@ -32,6 +35,20 @@ class GraphEmbeddingDataset(Dataset):
         )
         adjacency_matrix = adjacency_matrix.coalesce()
         return adjacency_matrix
+
+    def create_undirected_adjacency_matrix(self):
+        indices = self.edges_list.T
+        reverse_indices = torch.stack([indices[1], indices[0]], dim=0)
+        all_indices = torch.cat([indices, reverse_indices], dim=1)
+        all_indices = torch.unique(all_indices, dim=1)
+        values = torch.ones(all_indices.shape[1], dtype=torch.float32, device=self.device)
+        undirected_adjacency_matrix = torch.sparse_coo_tensor(
+            indices=all_indices,
+            values=values,
+            size=(self.num_nodes, self.num_nodes),
+            device=self.device
+        )
+        return undirected_adjacency_matrix.coalesce()
 
     def generate_adjacency_sets(self):
         adjacency_sets = [set() for _ in range(self.num_nodes)]
@@ -61,10 +78,14 @@ class GraphEmbeddingDataset(Dataset):
             batch_size=source_nodes.size(0))
         source_nodes_expanded = source_nodes.unsqueeze(1).expand(-1, self.num_negative_samples).reshape(-1)
         negative_edge_indices = torch.stack([source_nodes_expanded, negative_target_nodes], dim=0)
-        negative_edge_indices_in_adj = self.adjacency_matrix._indices()
+        if self.directed:
+            negative_edge_indices_in_adj = self.directed_adjacency_matrix._indices()
+        else:
+            negative_edge_indices_in_adj = self.undirected_adjacency_matrix._indices()
         adj_edge_keys = negative_edge_indices_in_adj[0] * self.num_nodes + negative_edge_indices_in_adj[1]
         negative_edge_keys = negative_edge_indices[0] * self.num_nodes + negative_edge_indices[1]
         mask = ~torch.isin(negative_edge_keys, adj_edge_keys)
+        mask = mask & (negative_edge_indices[0] != negative_edge_indices[1]) # also filter self edges
         valid_negative_source_nodes = source_nodes_expanded[mask]
         valid_negative_target_nodes = negative_target_nodes[mask]
         positive_edges = torch.stack([source_nodes, target_nodes], dim=1)
