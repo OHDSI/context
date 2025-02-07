@@ -68,7 +68,7 @@ def train(args: Namespace):
                 average_loss += loss.detach()
 
             average_loss /= len(dataloader)
-            print(f"Burn-in epoch {epoch} loss: {average_loss}")
+            tqdm.write(f"Burn-in epoch {epoch} loss: {average_loss}")
 
     # Now we use the actual learning rate
     optimizer = optimizer_object(
@@ -80,7 +80,7 @@ def train(args: Namespace):
                                                            mode='min',
                                                            factor=args.lr_reduce_factor,
                                                            patience=args.lr_reduce_patience)
-    early_stopper = EarlyStopper(patience=1000)
+    early_stopper = EarlyStopper(patience=args.early_stop_patience)
     loss_per_epoch = torch.empty(args.epochs, device=args.device)
     best_loss = float('inf')
     best_epoch = 0
@@ -106,13 +106,13 @@ def train(args: Namespace):
             save_model(model, args, output_directory, epoch, average_loss, loss_per_epoch)
 
         if early_stopper.update(average_loss):
-            print(f"Early stopping at epoch {epoch}")
+            tqdm.write(f"Early stopping at epoch {epoch}")
             break
-        print(f"Epoch {epoch} loss: {average_loss} lr: {scheduler.get_last_lr()}")
+        tqdm.write(f"Epoch {epoch} loss: {average_loss} lr: {scheduler.get_last_lr()}")
         loss_per_epoch[epoch] = average_loss
 
     model.load_state_dict(
-        torch.load(output_directory.joinpath("models", f"epoch:{best_epoch}-loss:{best_loss:3f}-{args.model_file}"))[
+        torch.load(output_directory.joinpath("models", f"epoch_{best_epoch}-loss_{best_loss:3f}-{args.model_file}"))[
             'state_dict'])
 
     weights_np = model.weight.data.cpu().numpy()
@@ -146,11 +146,11 @@ def save_model(model, args, output_directory, epoch, average_loss, loss_per_epoc
     models_dir = output_directory.joinpath("models")
     models_dir.mkdir(parents=True, exist_ok=True)
     # only keep top args.save_top models
-    saved_models = len(list(models_dir.glob(f"epoch:*-{args.model_file}")))
+    saved_models = len(list(models_dir.glob(f"epoch_*-{args.model_file}")))
     while saved_models >= args.save_top:
         # find the worst loss value from filename of saved models
         candidate_models = list(models_dir.glob(f"epoch:*-{args.model_file}"))
-        losses = [float(model.name.split('-')[1].split('-')[0].split(':')[1]) for model in candidate_models]
+        losses = [float(model.name.split('-')[1].split('_')[1]) for model in candidate_models]
         worst_loss = max(losses)
         worst_model = [model for model in candidate_models if float(model.name.split('-')[1].split('-')[0].split(':')[1]) == worst_loss][0]
         # remove the worst model
@@ -158,7 +158,7 @@ def save_model(model, args, output_directory, epoch, average_loss, loss_per_epoc
             worst_model.unlink()
         saved_models -= 1
     torch.save({'state_dict': model.state_dict(),
-            'args': args.__dict__, # convert dataclass to dict
-            'losses': loss_per_epoch,
-            'epoch': epoch,
-            }, models_dir.joinpath(f"epoch:{epoch}-loss:{average_loss:3f}-{args.model_file}"))
+                'args': args.__dict__,
+                'losses': loss_per_epoch,
+                'epoch': epoch,
+                }, models_dir.joinpath(f"epoch_{epoch}-loss_{average_loss:3f}-{args.model_file}"))
