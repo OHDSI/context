@@ -112,8 +112,8 @@ def train(args: Namespace):
         loss_per_epoch[epoch] = average_loss
 
     model.load_state_dict(
-        torch.load(output_directory.joinpath("models", f"epoch_{best_epoch}-loss_{best_loss:3f}-{args.model_file}"))[
-            'state_dict'])
+        torch.load(output_directory.joinpath("models", f"epoch_{best_epoch}-loss_{best_loss:3f}-{args.model_file}"),
+                   weights_only=False)['state_dict'])
 
     weights_np = model.weight.data.cpu().numpy()
     vec_file_path = output_directory.joinpath("vec.tsv")
