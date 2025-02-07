@@ -149,10 +149,10 @@ def save_model(model, args, output_directory, epoch, average_loss, loss_per_epoc
     saved_models = len(list(models_dir.glob(f"epoch_*-{args.model_file}")))
     while saved_models >= args.save_top:
         # find the worst loss value from filename of saved models
-        candidate_models = list(models_dir.glob(f"epoch:*-{args.model_file}"))
+        candidate_models = list(models_dir.glob(f"epoch_*-{args.model_file}"))
         losses = [float(model.name.split('-')[1].split('_')[1]) for model in candidate_models]
         worst_loss = max(losses)
-        worst_model = [model for model in candidate_models if float(model.name.split('-')[1].split('-')[0].split(':')[1]) == worst_loss][0]
+        worst_model = [model for model in candidate_models if float(model.name.split('-')[1].split('_')[1]) == worst_loss][0]
         # remove the worst model
         if worst_model.exists():
             worst_model.unlink()
