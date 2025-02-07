@@ -136,7 +136,7 @@ def train(args: Namespace):
 
     mean_rank, map_score = evaluate_model(model, dataset)
     # save rank and map as txt file
-    np.savetxt(output_directory.joinpath(f"mean-rank:{mean_rank}_map:{map_score}.txt"), [mean_rank, map_score])
+    np.savetxt(output_directory.joinpath(f"mean-rank_{mean_rank}_map_{map_score}.txt"), [mean_rank, map_score])
 
 # def save_for_plp(embeddings, dataset, args):
 #     concept_ids = torch.as_tensor(list(nx.get_node_attributes(dataset.graph, 'concept_id').values()), dtype=torch.long)
