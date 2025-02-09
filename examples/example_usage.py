@@ -8,14 +8,17 @@ from context.graph import Graph
 from context.train import train
 
 args = simple_parsing.parse(Args)
+experiment_folder = Path(args.output_directory) / args.experiment_id
+graph_file = experiment_folder / "graph.pkl"
+experiment_folder.mkdir(parents=True, exist_ok=True)
 
-if not Path(args.graph_file).exists():
+if not graph_file.exists():
     df = pl.read_csv("/Users/xxx/Desktop/opehr_concepts.csv")
     melted_df = df.select(["ancestor_concept_id", "descendant_concept_id"]).melt().get_column("value")
     unique_concepts = melted_df.unique().to_list()
     concept_ids = unique_concepts
 
-    hierarchy_path = "/Users/data/vocabulary/snomed/CONCEPT_ANCESTOR.csv"
+    hierarchy_path = "/Users/xxx/data/vocabulary/snomed/CONCEPT_ANCESTOR.csv"
 
     hierarchy = pl.read_csv(hierarchy_path, separator="\t")
     hierarchy = hierarchy.with_columns(pl.lit("subsumes").alias("edge_data"))
@@ -30,6 +33,6 @@ if not Path(args.graph_file).exists():
 
     g = Graph(filtered_hierarchy)
     g.intermediate_subgraph(concept_ids)
-    g.save(args.graph_file)
+    g.save(graph_file)
 
 train(args=args)

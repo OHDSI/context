@@ -4,8 +4,8 @@ from dataclasses import dataclass
 class Args:
     # output directory
     output_directory: str = '/Users/xxx/Desktop/output'
-    # path to a save and load a graph file
-    graph_file: str = '/Users/xxx/Desktop/output/graph.pkl'
+    # unique identifier for the experiment
+    experiment_id: str = "exp_default"
     # graph identifier
     graph_id = "intermediate"
     # root node label
@@ -17,17 +17,17 @@ class Args:
     # number of models to save
     save_top: int = 5
     # number of epochs to train for
-    epochs: int = 400
+    epochs: int = 1500
     # learning rate
-    learning_rate: float = 0.03*48
+    learning_rate: float = 0.003*1024
     # perform burn-in
     burn_in: bool = True
     # learning rate divisor for burn-in
-    burn_in_lr_divisor: float = 10
+    burn_in_lr_divisor: float = 100
     # number of burn-in epochs
-    burn_in_epochs: int = 10
+    burn_in_epochs: int = 20
     # batch size
-    batch_size: int = 4*64
+    batch_size: int = 1024
     # embedding dimension
     embedding_dim: int = 3
     # curvature of the Poincare ball
@@ -37,7 +37,7 @@ class Args:
     # device to use
     device: str = 'mps'
     # negative samples
-    negative_samples: int = 10
+    negative_samples: int = 50
     # optimizer to use; either 'adam' or 'sgd'
     optimizer: str = 'sgd'
     # patience for early stopping
@@ -46,3 +46,5 @@ class Args:
     lr_reduce_patience: int = 50
     # factor for learning rate reduction
     lr_reduce_factor: int = 0.1
+    # epoch interval for evaluating embedding
+    eval_interval: int = 25
