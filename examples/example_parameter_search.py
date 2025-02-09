@@ -56,13 +56,14 @@ def main():
         exp_args.experiment_id = f"exp_{experiment_counter:03d}"
         experiment_counter += 1
         experiment_folder = output_dir / exp_args.experiment_id
-        experiment_folder.mkdir(parents=True, exist_ok=True)
-        local_graph_file = experiment_folder / "graph.pkl"
-        if not local_graph_file.exists():
-            shutil.copy(common_graph_file, local_graph_file)
-        eval_records = train(args=exp_args)
-        for record in eval_records:
-            record.update(exp_config)
+        if experiment_folder.exists() and (experiment_folder / "eval_metrics.csv").exists():
+            eval_records = pl.read_csv(str(experiment_folder / "eval_metrics.csv")).to_dicts()
+        else:
+            experiment_folder.mkdir(parents=True, exist_ok=True)
+            local_graph_file = experiment_folder / "graph.pkl"
+            if not local_graph_file.exists():
+                shutil.copy(common_graph_file, local_graph_file)
+            eval_records = train(args=exp_args)
         all_eval_records.extend(eval_records)
         combined_df = pl.DataFrame(all_eval_records)
         if main_csv_file.exists():
