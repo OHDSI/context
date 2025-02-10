@@ -10,6 +10,8 @@ class Args:
     graph_id = "intermediate"
     # root node label
     root_node_label = 441840
+    # treat the dataset during training and evaluation as directed graph
+    directed: bool = False
     # concept dictionary
     concept_map = "/Users/xxx/data/vocabulary/snomed/CONCEPT.csv"
     # path to a model file to load a pre-trained model

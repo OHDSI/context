@@ -17,6 +17,7 @@ class GraphEmbeddingDataset(Dataset):
         self.num_edges = graph.num_edges()
         self.num_negative_samples = num_negative_samples
         self.adjacency_sets = self.generate_adjacency_sets()
+        self.undirected_adjacency_sets = self.generate_undirected_adjacency_sets()
         # self.non_adjacency_sets = self.generate_non_adjacency_sets()
         self.directed_adjacency_matrix = self.create_directed_sparse_adjacency_matrix()
         self.undirected_adjacency_matrix = self.create_undirected_adjacency_matrix()
@@ -56,6 +57,14 @@ class GraphEmbeddingDataset(Dataset):
             u, v = edge
             adjacency_sets[u].add(v)
         return adjacency_sets
+
+    def generate_undirected_adjacency_sets(self):
+        undirected_adjacency_sets = [set() for _ in range(self.num_nodes)]
+        for edge in self.edges_list.cpu().numpy():
+            u, v = edge
+            undirected_adjacency_sets[u].add(v)
+            undirected_adjacency_sets[v].add(u)
+        return undirected_adjacency_sets
 
     def generate_non_adjacency_sets(self):
         non_adjacency_sets = [set(range(self.num_nodes)) for _ in range(self.num_nodes)]

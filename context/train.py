@@ -28,7 +28,8 @@ def train(args: Namespace):
         if g.subgraph[args.graph_id][node_index] == args.root_node_label
     )
 
-    dataset = GraphEmbeddingDataset(graph=g.subgraph[args.graph_id], num_negative_samples = args.negative_samples)
+    dataset = GraphEmbeddingDataset(graph=g.subgraph[args.graph_id], num_negative_samples = args.negative_samples,
+                                    directed=args.directed)
     dataloader = DataLoader(dataset, sampler=BatchSampler(sampler=RandomSampler(dataset), batch_size=args.batch_size,
                                                           drop_last=False))
     poincare_ball = PoincareBall(c=Curvature(args.curvature))
@@ -107,7 +108,7 @@ def train(args: Namespace):
 
         if epoch % args.eval_interval == 0:
             tqdm.write(f"Evaluating model at epoch {epoch} ...")
-            mean_rank, map_score = evaluate_model(model, dataset)
+            mean_rank, map_score = evaluate_model(model, dataset, directed=args.directed)
             record = {
                 "epoch": epoch,
                 "mean_rank": mean_rank,
