@@ -9,14 +9,13 @@ from context.args import Args
 from context.graph import Graph
 from context.train import train
 
-def create_common_graph(common_graph_file: Path):
+def create_common_graph(common_graph_file: Path, args: Args):
     if common_graph_file.exists():
         return
-    df = pl.read_csv("/Users/xxx/Desktop/opehr_concepts.csv")
+    df = pl.read_csv(args.concept_id_file)
     melted_df = df.select(["ancestor_concept_id", "descendant_concept_id"]).melt().get_column("value")
     unique_concepts = melted_df.unique().to_list()
-    hierarchy_path = "/Users/xxx/data/vocabulary/snomed/CONCEPT_ANCESTOR.csv"
-    hierarchy = pl.read_csv(hierarchy_path, separator="\t")
+    hierarchy = pl.read_csv(args.hierarchy_file_path, separator="\t")
     hierarchy = hierarchy.with_columns(pl.lit("subsumes").alias("edge_data"))
     filtered_hierarchy = hierarchy.filter((pl.col("min_levels_of_separation") == 1) & (pl.col("max_levels_of_separation") == 1))\
                                 .select([pl.col("ancestor_concept_id").alias("source"),
@@ -31,13 +30,12 @@ def main():
     output_dir = Path(args.output_directory)
     output_dir.mkdir(parents=True, exist_ok=True)
     common_graph_file = output_dir / "graph.pkl"
-    create_common_graph(common_graph_file)
+    create_common_graph(common_graph_file, args)
     param_grid = {
-        "optimizer": ["sgd", "adam"],
-        "negative_samples": [10, 20, 50, 100],
-        "embedding_dim": [3, 5, 10, 20],
-        "burn_in_epochs": [10, 50],
-        "learning_rate": [0.003 * 1024, 0.003 * 512]
+        "directed": [True, False],
+        "negative_samples": [10, 50, 100],
+        "embedding_dim": [3, 10, 30, 100],
+        "burn_in_epochs": [10, 100]
     }
     param_keys = list(param_grid.keys())
     all_combinations = list(itertools.product(*(param_grid[key] for key in param_keys)))
@@ -48,11 +46,10 @@ def main():
     for combination in all_combinations:
         exp_config = dict(zip(param_keys, combination))
         exp_args = copy.deepcopy(args)
-        exp_args.optimizer = exp_config["optimizer"]
+        exp_args.directed = exp_config["directed"]
         exp_args.negative_samples = exp_config["negative_samples"]
         exp_args.embedding_dim = exp_config["embedding_dim"]
         exp_args.burn_in_epochs = exp_config["burn_in_epochs"]
-        exp_args.learning_rate = exp_config["learning_rate"]
         exp_args.experiment_id = f"exp_{experiment_counter:03d}"
         experiment_counter += 1
         experiment_folder = output_dir / exp_args.experiment_id

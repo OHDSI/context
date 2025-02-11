@@ -108,7 +108,7 @@ def train(args: Namespace):
 
         if epoch % args.eval_interval == 0:
             tqdm.write(f"Evaluating model at epoch {epoch} ...")
-            mean_rank, map_score = evaluate_model(model, dataset, directed=args.directed)
+            mean_rank, map_score = evaluate_model(model, dataset, directed=False)
             record = {
                 "epoch": epoch,
                 "mean_rank": mean_rank,
@@ -116,6 +116,7 @@ def train(args: Namespace):
                 "loss": average_loss,
                 "experiment_id": args.experiment_id,
                 "graph_id": args.graph_id,
+                "directed": args.directed,
                 "root_node_label": args.root_node_label,
                 "learning_rate": args.learning_rate,
                 "burn_in": args.burn_in,

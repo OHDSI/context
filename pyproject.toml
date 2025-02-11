@@ -5,11 +5,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "connectorx>=0.4.1",
+    "duckdb>=1.2.0",
     "hypll>=0.1.1",
     "igraph>=0.11.8",
     "matplotlib>=3.10.0",
     "networkx>=3.4.2",
     "polars>=1.17.1",
+    "pyarrow>=19.0.0",
     "rustworkx>=0.15.1",
     "scipy>=1.15.1",
     "simple-parsing>=0.1.7",

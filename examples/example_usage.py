@@ -13,14 +13,10 @@ graph_file = experiment_folder / "graph.pkl"
 experiment_folder.mkdir(parents=True, exist_ok=True)
 
 if not graph_file.exists():
-    df = pl.read_csv("/Users/xxx/Desktop/opehr_concepts.csv")
-    melted_df = df.select(["ancestor_concept_id", "descendant_concept_id"]).melt().get_column("value")
-    unique_concepts = melted_df.unique().to_list()
-    concept_ids = unique_concepts
+    df = pl.read_csv(args.concept_id_file)
+    concept_ids = df["conceptId"].unique().to_list()
 
-    hierarchy_path = "/Users/xxx/data/vocabulary/snomed/CONCEPT_ANCESTOR.csv"
-
-    hierarchy = pl.read_csv(hierarchy_path, separator="\t")
+    hierarchy = pl.read_csv(args.hierarchy_file_path, separator="\t")
     hierarchy = hierarchy.with_columns(pl.lit("subsumes").alias("edge_data"))
     filtered_hierarchy = hierarchy.filter(
         (pl.col("min_levels_of_separation") == 1) &
