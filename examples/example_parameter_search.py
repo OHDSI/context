@@ -13,8 +13,7 @@ def create_common_graph(common_graph_file: Path, args: Args):
     if common_graph_file.exists():
         return
     df = pl.read_csv(args.concept_id_file)
-    melted_df = df.select(["ancestor_concept_id", "descendant_concept_id"]).melt().get_column("value")
-    unique_concepts = melted_df.unique().to_list()
+    unique_concepts = df["conceptId"].unique().to_list()
     hierarchy = pl.read_csv(args.hierarchy_file_path, separator="\t")
     hierarchy = hierarchy.with_columns(pl.lit("subsumes").alias("edge_data"))
     filtered_hierarchy = hierarchy.filter((pl.col("min_levels_of_separation") == 1) & (pl.col("max_levels_of_separation") == 1))\

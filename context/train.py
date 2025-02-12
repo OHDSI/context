@@ -132,6 +132,7 @@ def train(args: Namespace):
                 "lr_reduce_factor": args.lr_reduce_factor,
             }
             eval_records.append(record)
+            save_single_model(model, args, experiment_folder, epoch, average_loss, loss_per_epoch)
 
         if early_stopper.update(average_loss):
             tqdm.write(f"Early stopping at epoch {epoch}")
@@ -196,3 +197,17 @@ def save_model(model, args, experiment_folder, epoch, average_loss, loss_per_epo
                 'losses': loss_per_epoch,
                 'epoch': epoch,
                 }, models_dir.joinpath(f"epoch_{epoch}-loss_{average_loss:3f}-{args.model_file}"))
+
+def save_single_model(model, args, experiment_folder, epoch, average_loss, loss_per_epoch):
+    models_dir = experiment_folder.joinpath("eval_models")
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"epoch_{epoch}-loss_{average_loss:3f}-{args.model_file}"
+    file_path = models_dir.joinpath(filename)
+
+    torch.save({
+        'state_dict': model.state_dict(),
+        'args': args.__dict__,
+        'losses': loss_per_epoch,
+        'epoch': epoch,
+    }, file_path)
