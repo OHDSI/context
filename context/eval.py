@@ -2,9 +2,9 @@ import torch
 from tqdm import tqdm
 
 
-def evaluate_model(model: torch.nn.Module, dataset, batch_size: int = 32):
+def evaluate_model(model: torch.nn.Module, dataset, batch_size: int = 64, directed: bool = False):
     mean_rank, map_score = evaluate_mean_rank_and_map(dataset, model.weight.tensor.detach(), dataset.num_nodes,
-                                                      batch_size=batch_size)
+                                                      batch_size=batch_size, directed=directed)
     print(f"Mean Rank: {mean_rank}, MAP: {map_score}")
     return mean_rank, map_score
 
@@ -69,11 +69,11 @@ def fast_average_precision(y_true, y_score):
     # Move the result back to CPU if needed and return a Python float
     return ap
 
-def evaluate_mean_rank_and_map(dataset, embeddings, num_nodes, batch_size=128):
+def evaluate_mean_rank_and_map(dataset, embeddings, num_nodes, batch_size=128, directed=False):
     edges_list = dataset.edges_list
     device = embeddings.device
     num_edges = edges_list.size(0)
-    adjacency_sets = dataset.generate_adjacency_sets()
+    adjacency_sets = dataset.generate_adjacency_sets(directed=directed)
     mean_ranks = torch.empty(num_edges, dtype=torch.int64, device=device)
     average_precisions = torch.empty(num_edges, dtype=torch.float32, device=device)
 

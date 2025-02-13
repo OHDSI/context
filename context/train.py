@@ -1,6 +1,6 @@
 from argparse import Namespace
 import csv
-import pathlib
+from pathlib import Path
 
 from hypll.manifolds.poincare_ball import Curvature, PoincareBall
 from hypll.optim import RiemannianSGD, RiemannianAdam
@@ -8,7 +8,6 @@ import torch
 from torch.utils.data import DataLoader, BatchSampler, RandomSampler
 from tqdm import tqdm
 import polars as pl
-import numpy as np
 
 from context.dataset import GraphEmbeddingDataset
 from context.eval import evaluate_model
@@ -18,19 +17,21 @@ from context.model import PoincareEmbedding
 from context.stopper import EarlyStopper
 
 def train(args: Namespace):
-    g = Graph.load(args.graph_file)
+    experiment_folder = Path(args.output_directory) / args.experiment_id
+    graph_file = experiment_folder / "graph.pkl"
+    experiment_folder.mkdir(parents=True, exist_ok=True)
+    eval_records = []
+
+    g = Graph.load(graph_file)
     root_node_index = next(
         node_index for node_index in g.subgraph[args.graph_id].node_indexes()
         if g.subgraph[args.graph_id][node_index] == args.root_node_label
     )
 
-    dataset = GraphEmbeddingDataset(graph=g.subgraph[args.graph_id], num_negative_samples = args.negative_samples)
+    dataset = GraphEmbeddingDataset(graph=g.subgraph[args.graph_id], num_negative_samples = args.negative_samples,
+                                    directed=args.directed)
     dataloader = DataLoader(dataset, sampler=BatchSampler(sampler=RandomSampler(dataset), batch_size=args.batch_size,
                                                           drop_last=False))
-
-    output_directory = pathlib.Path(args.output_directory)
-    if not output_directory.exists():
-        output_directory.mkdir(parents=True)
     poincare_ball = PoincareBall(c=Curvature(args.curvature))
 
     model = PoincareEmbedding(
@@ -52,7 +53,7 @@ def train(args: Namespace):
             params=model.parameters(),
             lr=args.learning_rate / args.burn_in_lr_divisor,
         )
-        for epoch in range(args.burn_in_epochs):
+        for epoch in range(1, args.burn_in_epochs + 1):
             average_loss = torch.tensor(0.0, device=args.device)
             for idx, (edges, edge_label_targets) in tqdm(enumerate(dataloader)):
                 edges = edges.to(args.device)
@@ -68,7 +69,7 @@ def train(args: Namespace):
                 average_loss += loss.detach()
 
             average_loss /= len(dataloader)
-            print(f"Burn-in epoch {epoch} loss: {average_loss}")
+            tqdm.write(f"Burn-in epoch {epoch} loss: {average_loss}")
 
     # Now we use the actual learning rate
     optimizer = optimizer_object(
@@ -80,11 +81,11 @@ def train(args: Namespace):
                                                            mode='min',
                                                            factor=args.lr_reduce_factor,
                                                            patience=args.lr_reduce_patience)
-    early_stopper = EarlyStopper(patience=1000)
+    early_stopper = EarlyStopper(patience=args.early_stop_patience)
     loss_per_epoch = torch.empty(args.epochs, device=args.device)
     best_loss = float('inf')
     best_epoch = 0
-    for epoch in range(args.epochs):
+    for epoch in range(1, args.epochs + 1):
         average_loss = torch.tensor(0.0, device=args.device)
         for idx, (edges, edge_label_targets) in tqdm(enumerate(dataloader), total=len(dataloader)):
             edges = edges.to(args.device)
@@ -103,20 +104,48 @@ def train(args: Namespace):
         if average_loss < best_loss:
             best_loss = average_loss
             best_epoch = epoch
-            save_model(model, args, output_directory, epoch, average_loss, loss_per_epoch)
+            save_model(model, args, experiment_folder, epoch, average_loss, loss_per_epoch)
+
+        if epoch % args.eval_interval == 0:
+            tqdm.write(f"Evaluating model at epoch {epoch} ...")
+            mean_rank, map_score = evaluate_model(model, dataset, directed=False)
+            record = {
+                "epoch": epoch,
+                "mean_rank": mean_rank,
+                "map_score": map_score,
+                "loss": average_loss,
+                "experiment_id": args.experiment_id,
+                "graph_id": args.graph_id,
+                "directed": args.directed,
+                "root_node_label": args.root_node_label,
+                "learning_rate": args.learning_rate,
+                "burn_in": args.burn_in,
+                "burn_in_lr_divisor": args.burn_in_lr_divisor,
+                "burn_in_epochs": args.burn_in_epochs,
+                "batch_size": args.batch_size,
+                "embedding_dim": args.embedding_dim,
+                "curvature": args.curvature,
+                "negative_samples": args.negative_samples,
+                "optimizer": args.optimizer,
+                "early_stop_patience": args.early_stop_patience,
+                "lr_reduce_patience": args.lr_reduce_patience,
+                "lr_reduce_factor": args.lr_reduce_factor,
+            }
+            eval_records.append(record)
+            save_single_model(model, args, experiment_folder, epoch, average_loss, loss_per_epoch)
 
         if early_stopper.update(average_loss):
-            print(f"Early stopping at epoch {epoch}")
+            tqdm.write(f"Early stopping at epoch {epoch}")
             break
-        print(f"Epoch {epoch} loss: {average_loss} lr: {scheduler.get_last_lr()}")
-        loss_per_epoch[epoch] = average_loss
+        tqdm.write(f"Epoch {epoch} loss: {average_loss} lr: {scheduler.get_last_lr()}")
+        loss_per_epoch[epoch-1] = average_loss
 
     model.load_state_dict(
-        torch.load(output_directory.joinpath("models", f"epoch:{best_epoch}-loss:{best_loss:3f}-{args.model_file}"))[
-            'state_dict'])
+        torch.load(experiment_folder.joinpath("models", f"epoch_{best_epoch}-loss_{best_loss:3f}-{args.model_file}"),
+                   weights_only=False)['state_dict'])
 
     weights_np = model.weight.data.cpu().numpy()
-    vec_file_path = output_directory.joinpath("vec.tsv")
+    vec_file_path = experiment_folder.joinpath("vec.tsv")
     with open(vec_file_path, mode='w', newline='') as file:
         writer = csv.writer(file, delimiter='\t')
         for row in weights_np:
@@ -131,34 +160,54 @@ def train(args: Namespace):
 
     labels = [concept_dict[node_id] for node_id in g.subgraph[args.graph_id].nodes()]
     df_labels = pl.DataFrame({"label": labels})
-    labels_file_path = output_directory.joinpath("labels.tsv")
+    labels_file_path = experiment_folder.joinpath("labels.tsv")
     df_labels.write_csv(str(labels_file_path), separator="\t", include_header=False)
 
-    mean_rank, map_score = evaluate_model(model, dataset)
-    # save rank and map as txt file
-    np.savetxt(output_directory.joinpath(f"mean-rank:{mean_rank}_map:{map_score}.txt"), [mean_rank, map_score])
+    if eval_records:
+        df_eval = pl.DataFrame(eval_records)
+        eval_csv_path = experiment_folder.joinpath("eval_metrics.csv")
+        df_eval.write_csv(str(eval_csv_path))
+        tqdm.write(f"Evaluation metrics saved to {eval_csv_path}")
+    else:
+        tqdm.write("No evaluation records were generated during training.")
+
+    return eval_records
 
 # def save_for_plp(embeddings, dataset, args):
 #     concept_ids = torch.as_tensor(list(nx.get_node_attributes(dataset.graph, 'concept_id').values()), dtype=torch.long)
 #     torch.save({'concept_ids': concept_ids, 'embeddings': embeddings}, 'poincare_embeddings_snomed_plp.pt')
 
-def save_model(model, args, output_directory, epoch, average_loss, loss_per_epoch):
-    models_dir = output_directory.joinpath("models")
+def save_model(model, args, experiment_folder, epoch, average_loss, loss_per_epoch):
+    models_dir = experiment_folder.joinpath("models")
     models_dir.mkdir(parents=True, exist_ok=True)
     # only keep top args.save_top models
-    saved_models = len(list(models_dir.glob(f"epoch:*-{args.model_file}")))
+    saved_models = len(list(models_dir.glob(f"epoch_*-{args.model_file}")))
     while saved_models >= args.save_top:
         # find the worst loss value from filename of saved models
-        candidate_models = list(models_dir.glob(f"epoch:*-{args.model_file}"))
-        losses = [float(model.name.split('-')[1].split('-')[0].split(':')[1]) for model in candidate_models]
+        candidate_models = list(models_dir.glob(f"epoch_*-{args.model_file}"))
+        losses = [float(model.name.split('-')[1].split('_')[1]) for model in candidate_models]
         worst_loss = max(losses)
-        worst_model = [model for model in candidate_models if float(model.name.split('-')[1].split('-')[0].split(':')[1]) == worst_loss][0]
+        worst_model = [model for model in candidate_models if float(model.name.split('-')[1].split('_')[1]) == worst_loss][0]
         # remove the worst model
         if worst_model.exists():
             worst_model.unlink()
         saved_models -= 1
     torch.save({'state_dict': model.state_dict(),
-            'args': args.__dict__, # convert dataclass to dict
-            'losses': loss_per_epoch,
-            'epoch': epoch,
-            }, models_dir.joinpath(f"epoch:{epoch}-loss:{average_loss:3f}-{args.model_file}"))
+                'args': args.__dict__,
+                'losses': loss_per_epoch,
+                'epoch': epoch,
+                }, models_dir.joinpath(f"epoch_{epoch}-loss_{average_loss:3f}-{args.model_file}"))
+
+def save_single_model(model, args, experiment_folder, epoch, average_loss, loss_per_epoch):
+    models_dir = experiment_folder.joinpath("eval_models")
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"epoch_{epoch}-loss_{average_loss:3f}-{args.model_file}"
+    file_path = models_dir.joinpath(filename)
+
+    torch.save({
+        'state_dict': model.state_dict(),
+        'args': args.__dict__,
+        'losses': loss_per_epoch,
+        'epoch': epoch,
+    }, file_path)

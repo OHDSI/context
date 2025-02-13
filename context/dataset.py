@@ -16,53 +16,34 @@ class GraphEmbeddingDataset(Dataset):
         self.num_nodes = graph.num_nodes()
         self.num_edges = graph.num_edges()
         self.num_negative_samples = num_negative_samples
-        self.adjacency_sets = self.generate_adjacency_sets()
-        # self.non_adjacency_sets = self.generate_non_adjacency_sets()
-        self.directed_adjacency_matrix = self.create_directed_sparse_adjacency_matrix()
-        self.undirected_adjacency_matrix = self.create_undirected_adjacency_matrix()
+        self.directed_adjacency_matrix = self.create_sparse_adjacency_matrix(directed=True)
+        self.undirected_adjacency_matrix = self.create_sparse_adjacency_matrix(directed=False)
         self.directed = directed
 
     def __len__(self) -> int:
         return self.num_edges
 
-    def create_directed_sparse_adjacency_matrix(self):
-        values = torch.ones(size=(self.edges_list.shape[0],), dtype=torch.float32, device=self.device)
-        adjacency_matrix = torch.sparse_coo_tensor(
-            indices=self.edges_list.T,
-            values=values,
-            size=(self.num_nodes, self.num_nodes),
-            device=self.device
-        )
-        adjacency_matrix = adjacency_matrix.coalesce()
-        return adjacency_matrix
-
-    def create_undirected_adjacency_matrix(self):
+    def create_sparse_adjacency_matrix(self, directed):
         indices = self.edges_list.T
-        reverse_indices = torch.stack([indices[1], indices[0]], dim=0)
-        all_indices = torch.cat([indices, reverse_indices], dim=1)
-        all_indices = torch.unique(all_indices, dim=1)
-        values = torch.ones(all_indices.shape[1], dtype=torch.float32, device=self.device)
-        undirected_adjacency_matrix = torch.sparse_coo_tensor(
-            indices=all_indices,
+        if not directed:
+            indices = torch.cat([indices, indices[[1, 0]]], dim=1)
+            indices = torch.unique(indices, dim=1)
+        values = torch.ones(indices.size(1), dtype=torch.float32, device=self.device)
+        return torch.sparse_coo_tensor(
+            indices=indices,
             values=values,
             size=(self.num_nodes, self.num_nodes),
             device=self.device
-        )
-        return undirected_adjacency_matrix.coalesce()
+        ).coalesce()
 
-    def generate_adjacency_sets(self):
+    def generate_adjacency_sets(self, directed):
         adjacency_sets = [set() for _ in range(self.num_nodes)]
         for edge in self.edges_list.cpu().numpy():
             u, v = edge
             adjacency_sets[u].add(v)
+            if not directed:
+                adjacency_sets[v].add(u)
         return adjacency_sets
-
-    def generate_non_adjacency_sets(self):
-        non_adjacency_sets = [set(range(self.num_nodes)) for _ in range(self.num_nodes)]
-        for node, adjacents in enumerate(self.adjacency_sets):
-            non_adjacency_sets[node] -= adjacents
-            non_adjacency_sets[node].discard(node)
-        return non_adjacency_sets
 
     def sample_negative_uniform(self, batch_size: int):
         negative_nodes = torch.randint(low=0, high=self.num_nodes,
