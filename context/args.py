@@ -6,8 +6,8 @@ class Args:
     output_directory: str = '/Users/xxx/Desktop/output'
     # unique identifier for the experiment
     experiment_id: str = "exp_default"
-    # graph identifier
-    graph_id = "intermediate"
+    # subgraph identifier
+    graph_id = "ancestral"
     # root node label
     root_node_label = 441840
     # treat the dataset during training and evaluation as directed graph

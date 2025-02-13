@@ -21,7 +21,7 @@ def create_common_graph(common_graph_file: Path, args: Args):
                                          pl.col("descendant_concept_id").alias("target"),
                                          "edge_data"])
     g = Graph(filtered_hierarchy)
-    g.intermediate_subgraph(unique_concepts)
+    g.ancestral_subgraph(unique_concepts)
     g.save(common_graph_file)
 
 def main():

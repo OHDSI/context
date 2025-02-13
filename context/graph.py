@@ -4,7 +4,14 @@ import igraph as ig
 import time
 import pickle
 import matplotlib.pyplot as plt
+import tempfile
+import polars as pl
+import duckdb
+import shutil
 from tqdm import tqdm
+from pathlib import Path
+from zipfile import ZipFile
+from urllib.parse import quote
 
 class Graph:
     def __init__(self, hierarchy):
@@ -113,10 +120,10 @@ class Graph:
 
     def selective_subgraph(self, concept_ids, name="selective"):
         # todo: a subgraph that only contains the nodes specified in concept_ids and must create new edges between them.
-        #  It may be best to use intermediate subgraph as basis.
+        #  It may be best to use ancestral subgraph as basis.
         return None
 
-    def intermediate_subgraph(self, nodes, name="intermediate", root_node=None):
+    def ancestral_subgraph(self, nodes, name="ancestral"):
         start_time = time.time()
 
         igraph_full = self._to_igraph(self.full_graph)
@@ -134,6 +141,90 @@ class Graph:
         self.subgraph[name] = rustworkx_subgraph
         print(f"Created {name} subgraph in {time.time() - start_time:.2f} seconds")
         print(repr(self))
+
+    @staticmethod
+    def get_concept_set(data_object_dirs, output_folder = None):
+        all_concept_ids = set()
+        for dir_path in data_object_dirs:
+            print(f"\nProcessing data object in {dir_path} ...")
+            try:
+                data_ref = Graph._process_data_object(dir_path)
+                df = data_ref.collect()
+                concept_ids = df["conceptId"].to_list()
+                for cid in concept_ids:
+                    try:
+                        all_concept_ids.add(int(cid))
+                    except Exception as ex:
+                        print(f"Could not cast {cid} to int: {ex}")
+            except Exception as e:
+                print(f"An error occurred while processing {dir_path}: {e}")
+
+        # Remove the 0 value if present.
+        all_concept_ids.discard(0)
+        # Add the root node concept id 441840 Clinical finding explicitly.
+        all_concept_ids.add(441840)
+        all_concept_ids = sorted(list(all_concept_ids))
+
+        if output_folder is not None:
+            result_df = pl.DataFrame({"conceptId": all_concept_ids}, schema={"conceptId": pl.Int64})
+            output_folder_path = Path(output_folder)
+            output_folder_path.mkdir(parents=True, exist_ok=True)
+            output_csv = output_folder_path / "concept_ids.csv"
+            result_df.write_csv(output_csv)
+            print(f"Saved all concept ids to {output_csv}")
+        return all_concept_ids
+
+    def ancestral_subgraph_from_plp_data(self, data_object_dirs, name="ancestral"):
+        """
+        data_object_dirs = [
+            "/Users/xxx/data/plp/yyy",
+            "/Users/xxx/data/plp/yyy",
+            "/Users/xxx/data/plp/yyy"
+        ]
+        :param data_object_dirs:
+        :param name:
+        :return result_df:
+        """
+
+
+        self.ancestral_subgraph(self.get_concept_set(data_object_dirs), name=name)
+
+    @staticmethod
+    def _process_data_object(data_object_dir):
+        zip_path = Path(data_object_dir) / "covariates"
+        if not zip_path.exists():
+            raise FileNotFoundError(f"Zip file not found: {zip_path}")
+
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            tmpdir = Path(tmpdirname)
+            with ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(tmpdir)
+
+            sql_files = list(tmpdir.glob("*.sqlite")) + list(tmpdir.glob("*.duckdb"))
+            if not sql_files:
+                raise FileNotFoundError(
+                    "No supported SQL database file (.sqlite or .duckdb) found in the zip archive.")
+
+            data = str(sql_files[0])
+            print(f"Found database file: {data}")
+
+            if Path(data).suffix == ".sqlite":
+                data = quote(data)
+                data_ref = pl.read_database_uri(
+                    "SELECT * FROM covariateRef", uri=f"sqlite://{data}"
+                ).lazy()
+            elif Path(data).suffix == ".duckdb":
+                data = quote(data)
+                # Create a local copy for DuckDB.
+                destination = Path(data).parent.joinpath("python_copy.duckdb")
+                path_copy = Path(shutil.copy(data, destination))
+                conn = duckdb.connect(str(path_copy))
+                data_ref = conn.sql("SELECT * FROM covariateRef").pl().lazy()
+                conn.close()
+                path_copy.unlink()  # Remove the temporary copy.
+            else:
+                raise ValueError("Only .sqlite and .duckdb files are supported")
+            return data_ref
 
     def print_nodes(self, graph_name="full"):
         graph = (

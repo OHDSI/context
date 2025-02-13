@@ -73,10 +73,7 @@ def evaluate_mean_rank_and_map(dataset, embeddings, num_nodes, batch_size=128, d
     edges_list = dataset.edges_list
     device = embeddings.device
     num_edges = edges_list.size(0)
-    if directed:
-        adjacency_sets = dataset.generate_adjacency_sets()
-    else:
-        adjacency_sets = dataset.generate_undirected_adjacency_sets()
+    adjacency_sets = dataset.generate_adjacency_sets(directed=directed)
     mean_ranks = torch.empty(num_edges, dtype=torch.int64, device=device)
     average_precisions = torch.empty(num_edges, dtype=torch.float32, device=device)
 

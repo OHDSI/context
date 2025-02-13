@@ -7,12 +7,12 @@ def test_create_full_graph(dummy_data_small):
     assert g.full_graph.num_nodes() == 7, "Number of nodes is not 7"
     assert g.full_graph.num_edges() == 7, "Number of edges is not 7"
 
-def test_create_intermediate_subgraph(dummy_data_small):
+def test_create_ancestral_subgraph(dummy_data_small):
     concept_ids = ["A", "C", "E", "G"]
     g = Graph(dummy_data_small)
-    g.intermediate_subgraph(concept_ids)
-    assert g.subgraph['intermediate'].num_nodes() == 6, "Number of nodes is not 6"
-    assert g.subgraph['intermediate'].num_edges() == 6, "Number of edges is not 6"
+    g.ancestral_subgraph(concept_ids)
+    assert g.subgraph["ancestral"].num_nodes() == 6, "Number of nodes is not 6"
+    assert g.subgraph["ancestral"].num_edges() == 6, "Number of edges is not 6"
 
 def test_find_root_nodes(dummy_data_small):
     g = Graph(dummy_data_small)
