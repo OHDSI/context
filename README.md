@@ -23,7 +23,13 @@ The dimension and learning rate illustrate the interface. Select them for the in
 | Updates | PyTorch SGD or Adam | hypll Riemannian SGD or Adam |
 | Output for experiment `taxonomy` | `output/taxonomy/euclidean/` | `output/taxonomy/` (original location) |
 
-`both` builds or loads one graph, resolves labels once, and fits each geometry using the same shuffled positive edges and negative draws at corresponding epochs. Both anchor the designated root at zero. Euclidean vectors are learned directly. The curvature option applies to the Poincaré fit.
+`both` builds or loads one graph, resolves labels once, and fits each geometry using the same shuffled positive edges and negative draws at corresponding epochs. By default both anchor the designated root at zero. Euclidean vectors are learned directly. The curvature option applies to the Poincaré fit.
+
+### Euclidean root placement
+
+The graph root selects which SNOMED descendants belong in the taxonomy. Use `--euclidean_root trainable` to fit its Euclidean vector along with the other concept vectors. Both policies start the root at zero. The Poincaré fit in `--geometry both` keeps its named root anchored. Trainable-root Euclidean outputs go in `euclidean/trainable-root/`, so both Euclidean fits can share an experiment and graph.
+
+For a Euclidean artifact with a named root, `vectors - vectors[artifact["graph_root_index"]]` places it at the origin after training and preserves all L2 distances up to rounding. `graph_root_index` identifies the named node. The existing `root_index` field identifies a frozen row and is null for a trainable root. Apply a chosen coordinate convention consistently when training and using a downstream model that consumes raw vectors. Parent–child direction is available from the graph.
 
 ## Graph inputs
 

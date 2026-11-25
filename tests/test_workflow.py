@@ -165,3 +165,46 @@ def test_parameter_search_reuses_only_matching_runs(settings, monkeypatch):
     grid.main()
     changed = replace(settings, epochs=4, experiment_id="trial_000")
     assert grid.cached_metrics(changed, "changed graph") is None
+
+
+@pytest.mark.parametrize("device", ["cpu", "mps"])
+def test_trainable_root_with_typed_graph_and_paired_cli(tmp_path, device):
+    if device == "mps" and not torch.backends.mps.is_available():
+        pytest.skip("MPS unavailable")
+    ids = tmp_path / "seeds.csv"
+    ids.write_text("conceptId\n11\n45\n82\n")
+    concepts = tmp_path / "concepts.tsv"
+    concepts.write_text("concept_id\tconcept_name\tvocabulary_id\tstandard_concept\tinvalid_reason\n" +
+                        "".join(f"{i}\tconcept {i}\tSNOMED\tS\t\n" for i in [11, 27, 33, 45, 82, 90]))
+    links = tmp_path / "relationships.tsv"
+    links.write_text("concept_id_1\tconcept_id_2\trelationship_id\tinvalid_reason\n" +
+                     "".join(f"{child}\t{parent}\tIs a\t\n" for child, parent in
+                             [(33, 90), (27, 90), (11, 33), (11, 27), (45, 33), (82, 27)]))
+    cmd = [sys.executable, "-m", "context", "--output_directory", str(tmp_path), "--experiment_id", "roots",
+           "--root_node_label", "90", "--concept_id_file", str(ids), "--concept_map", str(concepts),
+           "--relationship_file_path", str(links), "--epochs", "2", "--burn_in", "false", "--eval_interval", "0",
+           "--optimizer", "adam", "--learning_rate", ".02", "--negative_samples", "3", "--device", device]
+    subprocess.run(cmd + ["--geometry", "both", "--euclidean_root", "trainable"], check=True, cwd=tmp_path)
+    folder = tmp_path / "roots"
+    hyper = torch.load(folder / "embedding.pt", weights_only=True)
+    separate = folder / "euclidean" / "trainable-root"
+    free = torch.load(separate / "embedding.pt", weights_only=True)
+    root = free["graph_root_index"]
+    assert torch.equal(hyper["concept_ids"], free["concept_ids"])
+    assert free["concept_ids"][root] == 90
+    assert root == hyper["graph_root_index"] == hyper["root_index"]
+    assert free["root_index"] is None
+    assert torch.count_nonzero(hyper["embeddings"][root]) == 0
+    assert torch.count_nonzero(free["embeddings"][root]) > 0
+    checkpoint = next((separate / "models").glob(f"epoch_{free['epoch']}-*.pt"))
+    restored = load_model(checkpoint)
+    assert restored.root_concept_index is None
+    torch.testing.assert_close(restored.coordinates(), free["embeddings"], rtol=0, atol=0)
+    assert torch.load(checkpoint, weights_only=True)["args"]["root_node_label"] == 90
+
+    subprocess.run(cmd + ["--geometry", "euclidean"], check=True, cwd=tmp_path)
+    fixed = torch.load(folder / "euclidean" / "embedding.pt", weights_only=True)
+    assert fixed["graph_root_index"] == fixed["root_index"] == root
+    assert torch.count_nonzero(fixed["embeddings"][root]) == 0
+    repeated = torch.load(separate / "embedding.pt", weights_only=True)
+    assert torch.equal(repeated["embeddings"], free["embeddings"])

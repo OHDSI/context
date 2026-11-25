@@ -46,7 +46,7 @@ def concept_labels(concept_ids, concept_map):
     return [lookup.get(str(i)) or str(i) for i in concept_ids]
 
 
-def export_embedding(folder, model, concept_ids, labels, epoch):
+def export_embedding(folder, model, concept_ids, labels, epoch, *, graph_root_index=None):
     values = model.coordinates().detach().cpu().contiguous()
     info = metadata(model)
     _check_points(values, info["curvature"])
@@ -59,7 +59,8 @@ def export_embedding(folder, model, concept_ids, labels, epoch):
         ids = [str(i) for i in concept_ids]
     else:
         raise ValueError("Concept labels must be integer IDs or a list of string labels")
-    torch.save({"format_version": 1, **info, "epoch": epoch, "concept_ids": ids,
+    graph_root_index = root if graph_root_index is None else graph_root_index
+    torch.save({"format_version": 1, **info, "graph_root_index": graph_root_index, "epoch": epoch, "concept_ids": ids,
                 "embeddings": values}, folder / "embedding.pt")
     pl.DataFrame(values.numpy(), orient="row").write_csv(folder / "vec.tsv", separator="\t", include_header=False)
     pl.DataFrame({"label": labels}).write_csv(folder / "labels.tsv", separator="\t", include_header=False)

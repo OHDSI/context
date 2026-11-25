@@ -36,3 +36,5 @@ class Args:
     relationship_file_path: str | None = None
     geometry: Literal["hyperbolic", "euclidean", "both"] = "hyperbolic"
     seed: int = 1
+    # Controls the Euclidean optimizer; root_node_label selects the taxonomy root.
+    euclidean_root: Literal["fixed", "trainable"] = "fixed"

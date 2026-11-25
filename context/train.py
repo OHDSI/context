@@ -25,7 +25,11 @@ from context.stopper import EarlyStopper
 
 def output_folder(args, geometry):
     folder = Path(args.output_directory) / args.experiment_id
-    return folder if geometry == "hyperbolic" else folder / "euclidean"
+    if geometry == "euclidean":
+        folder = folder / "euclidean"
+        if getattr(args, "euclidean_root", "fixed") == "trainable":
+            folder = folder / "trainable-root"
+    return folder
 
 
 def build_graph(args):
@@ -41,6 +45,8 @@ def build_graph(args):
 def _validate(args):
     if args.geometry not in ("euclidean", "hyperbolic", "both"):
         raise ValueError(f"Unknown geometry {args.geometry!r}")
+    if args.euclidean_root not in ("fixed", "trainable"):
+        raise ValueError("euclidean_root must be fixed or trainable")
     if args.optimizer not in ("sgd", "adam"):
         raise ValueError(f"Unknown optimizer {args.optimizer!r}")
     if min(args.epochs, args.save_top, args.batch_size, args.embedding_dim, args.negative_samples) < 1:
@@ -69,7 +75,8 @@ def geometry_settings(args, geometry):
     filename = args.model_file
     if geometry == "euclidean" and filename == Args.model_file:
         filename = "euclidean_embeddings_snomed.pt"
-    return replace(args, geometry=geometry, model_file=filename)
+    root_mode = args.euclidean_root if geometry == "euclidean" else "fixed"
+    return replace(args, geometry=geometry, model_file=filename, euclidean_root=root_mode)
 
 
 def train(args):
@@ -104,7 +111,7 @@ def train(args):
         for geometry in geometries:
             settings = geometry_settings(args, geometry)
             destination = output_folder(settings, geometry)
-            destination.mkdir(exist_ok=True)
+            destination.mkdir(parents=True, exist_ok=True)
             stage = Path(mkdtemp(prefix=".context-fit-", dir=destination))
             try:
                 records.extend(_fit(settings, dataset, root, labels, stage, graph_digest))
@@ -123,9 +130,14 @@ def _fit(args, dataset, root, labels, stage, graph_digest):
     # Independent RNG streams keep paired runs on identical positives and negatives.
     order = torch.Generator().manual_seed(args.seed)
     negatives = np.random.default_rng(args.seed)
+    anchor = None if args.geometry == "euclidean" and args.euclidean_root == "trainable" else root
     with torch.random.fork_rng(devices=[]):
         torch.random.default_generator.manual_seed(args.seed)
-        model = create_embedding(dataset.num_nodes, args.embedding_dim, args.geometry, args.curvature, root)
+        model = create_embedding(dataset.num_nodes, args.embedding_dim, args.geometry, args.curvature, anchor)
+        if root is not None and anchor is None:
+            # Match the fixed fit at initialization, then update every row normally.
+            with torch.no_grad():
+                model.coordinates()[root].zero_()
     model = model.to(args.device)
     forward = torch.compile(model) if args.compile else model
     if args.geometry == "hyperbolic":
@@ -176,7 +188,7 @@ def _fit(args, dataset, root, labels, stage, graph_digest):
 
     _, best_epoch, best_path = kept[0]
     selected = load_model(best_path)
-    export_embedding(stage, selected, dataset.concept_ids, labels, best_epoch)
+    export_embedding(stage, selected, dataset.concept_ids, labels, best_epoch, graph_root_index=root)
     summary = {"settings": vars(args), "graph_sha256": graph_digest, "selected_epoch": best_epoch,
                "training_loss": losses, "nodes": dataset.num_nodes, "graph_edges": dataset.num_edges,
                "training_positives": dataset.training_size, "positives_without_negatives": dataset.skipped_positives,
