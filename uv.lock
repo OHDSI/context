@@ -11,27 +11,17 @@ wheels = [
 ]
 
 [[package]]
-name = "connectorx"
-version = "0.4.1"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c2/88/35c50622ce7a5d7d4d6fa4b6dadcae7ee807fff9fc9a9e712a278c76c26e/connectorx-0.4.1-cp312-cp312-macosx_10_7_x86_64.whl", hash = "sha256:b23b108e2e7a361a058bd83b88cc677a9ef047ad1e9e7ff61a6771f4e6d9536a", size = 37894322 },
-    { url = "https://files.pythonhosted.org/packages/34/43/0c50b6d5fd3e846d6ff21e7d4b6785488660fb55341565fd8751a1610d5e/connectorx-0.4.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:0bae0c076ce781ec06f9a7e18f0a4f575c754b9100238cc574e8edd221e10ec2", size = 36132134 },
-    { url = "https://files.pythonhosted.org/packages/20/3f/c67d7d4cb2f73495a4cedab9702c49c4a7cbffa860f4ede596014afbbbc7/connectorx-0.4.1-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:4159f6578a8b539bbbc3a4efd508b9ae38dad5e037f3349d3b5cbebfa7fa8e66", size = 43251108 },
-    { url = "https://files.pythonhosted.org/packages/52/46/fdc6577596c59d2c7cb231a2e037107d873c1e8ff55f197af8c9a1dd09f8/connectorx-0.4.1-cp312-none-win_amd64.whl", hash = "sha256:fd64156b8f6e14cc77f8e4ffe49b77fc4adea1414268433f032b5c91dc5f9e2f", size = 34747963 },
-]
-
-[[package]]
 name = "context"
-version = "0.1.0"
-source = { virtual = "." }
+version = "2025.2.13a1"
+source = { editable = "." }
 dependencies = [
-    { name = "connectorx" },
     { name = "duckdb" },
+    { name = "filelock" },
     { name = "hypll" },
     { name = "igraph" },
     { name = "matplotlib" },
     { name = "networkx" },
+    { name = "numpy" },
     { name = "polars" },
     { name = "pyarrow" },
     { name = "rustworkx" },
@@ -48,12 +38,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "connectorx", specifier = ">=0.4.1" },
     { name = "duckdb", specifier = ">=1.2.0" },
+    { name = "filelock", specifier = ">=3.16.1" },
     { name = "hypll", specifier = ">=0.1.1" },
     { name = "igraph", specifier = ">=0.11.8" },
     { name = "matplotlib", specifier = ">=3.10.0" },
     { name = "networkx", specifier = ">=3.4.2" },
+    { name = "numpy", specifier = ">=2.2" },
     { name = "polars", specifier = ">=1.17.1" },
     { name = "pyarrow", specifier = ">=19.0.0" },
     { name = "rustworkx", specifier = ">=0.15.1" },

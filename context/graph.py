@@ -1,9 +1,8 @@
 import rustworkx as rx
-import networkx as nx
-import igraph as ig
 import time
 import pickle
-import matplotlib.pyplot as plt
+import sqlite3
+import warnings
 import tempfile
 import polars as pl
 import duckdb
@@ -11,7 +10,8 @@ import shutil
 from tqdm import tqdm
 from pathlib import Path
 from zipfile import ZipFile
-from urllib.parse import quote
+
+from context.taxonomy import rooted_snomed_edges
 
 class Graph:
     def __init__(self, hierarchy):
@@ -44,17 +44,18 @@ class Graph:
 
     def __repr__(self):
         subgraph_info = ", ".join(
-            f"{name}: ({len(subgraph.node_indexes())} nodes, "
-            f"{len(subgraph.edge_list())} edges)"
+            f"{name}: ({subgraph.num_nodes()} nodes, "
+            f"{subgraph.num_edges()} edges)"
             for name, subgraph in self.subgraph.items()
         )
         return (
-            f"Directed graph has {len(self.full_graph.node_indexes())} nodes "
-            f"and {len(self.full_graph.edge_list())} edges; "
+            f"Directed graph has {self.full_graph.num_nodes()} nodes "
+            f"and {self.full_graph.num_edges()} edges; "
             f"Subgraphs: [{subgraph_info}]"
         )
 
     def _to_networkx(self, rustworkx_graph):
+        import networkx as nx
         start = time.time()
 
         nx_graph = nx.DiGraph()
@@ -68,6 +69,7 @@ class Graph:
         return nx_graph
 
     def _to_igraph(self, rustworkx_graph):
+        import igraph as ig
         start = time.time()
 
         igraph_graph = ig.Graph(directed=True)
@@ -90,19 +92,16 @@ class Graph:
         rustworkx_graph = rx.PyDiGraph()
         for vertex in tqdm(igraph_graph.vs, desc="Converting nodes to rustworkx graph"):
             rustworkx_graph.add_node(vertex['name'])
-        for edge in tqdm(igraph_graph.es, desc="Converting edges to rustworkx graph"):
-            source_label = igraph_graph.vs[edge.source]['name']
-            target_label = igraph_graph.vs[edge.target]['name']
-            weight = edge['weight'] if 'weight' in edge.attributes() else None
-            source_rustworkx_index = rustworkx_graph.nodes().index(source_label)
-            target_rustworkx_index = rustworkx_graph.nodes().index(target_label)
-            rustworkx_graph.add_edge(source_rustworkx_index, target_rustworkx_index, weight)
+        weights = igraph_graph.es["weight"] if "weight" in igraph_graph.edge_attributes() else [None] * igraph_graph.ecount()
+        rustworkx_graph.add_edges_from([(s, t, w) for (s, t), w in zip(igraph_graph.get_edgelist(), weights)])
 
         delta = time.time() - start
         print(f"Converted to rustworkx in {delta:.2f} seconds")
         return rustworkx_graph
 
     def plot(self, graph_name="full", edge_labels=True):
+        import matplotlib.pyplot as plt
+        import networkx as nx
         if graph_name == "full":
             rustworkx_graph = self.full_graph
         elif graph_name in self.subgraph:
@@ -124,45 +123,72 @@ class Graph:
         return None
 
     def ancestral_subgraph(self, nodes, name="ancestral"):
-        start_time = time.time()
+        # One reverse traversal from all requested seeds preserves every parent.
+        lookup = {self.full_graph[i]: i for i in self.full_graph.node_indexes()}
+        selected = {lookup[n] for n in nodes if n in lookup}
+        frontier = list(selected)
+        while frontier:
+            child = frontier.pop()
+            for parent in self.full_graph.predecessor_indices(child):
+                if parent not in selected:
+                    selected.add(parent)
+                    frontier.append(parent)
+        result = self.full_graph.subgraph(sorted(selected))
+        self.subgraph[name] = result
+        return result
 
-        igraph_full = self._to_igraph(self.full_graph)
-        valid_node_indices = []
-        for v in tqdm(igraph_full.vs, desc=f"Collecting valid node indices for {name} subgraph"):
-            if v['name'] in nodes:
-                valid_node_indices.append(v.index)
-        all_relevant_indices = set()
-        for index in tqdm(valid_node_indices, desc=f"Finding ancestor nodes for {name} subgraph"):
-            ancestors = igraph_full.subcomponent(index, mode="in")
-            all_relevant_indices.update(ancestors)
-        igraph_subgraph = igraph_full.induced_subgraph(list(all_relevant_indices))
-        rustworkx_subgraph = self._to_rustworkx(igraph_subgraph)
+    @classmethod
+    def from_omop(cls, ancestor_file, concept_ids, name="ancestral"):
+        """Build the ancestral subgraph from one-step entries in CONCEPT_ANCESTOR."""
+        # A direct parent can also have a longer alternative path in a DAG.
+        edges = (pl.scan_csv(ancestor_file, separator="\t", quote_char=None)
+                 .filter((pl.col("min_levels_of_separation") == 1) &
+                         (pl.col("ancestor_concept_id") != pl.col("descendant_concept_id")))
+                 .select("ancestor_concept_id", "descendant_concept_id").unique()
+                 .sort(["ancestor_concept_id", "descendant_concept_id"]).collect())
+        graph = cls(edges.with_columns(pl.lit("subsumes").alias("relation")))
+        graph.ancestral_subgraph(concept_ids, name)
+        return graph
 
-        self.subgraph[name] = rustworkx_subgraph
-        print(f"Created {name} subgraph in {time.time() - start_time:.2f} seconds")
-        print(repr(self))
+    @classmethod
+    def from_snomed_taxonomy(cls, concept_file, relationship_file, concept_ids, root=441840, name="ancestral"):
+        """Build a rooted directed acyclic graph of explicit SNOMED is-a statements."""
+        edges, nodes, summary = rooted_snomed_edges(concept_file, relationship_file, concept_ids, root)
+        table = pl.DataFrame(edges, schema={"parent": pl.Int64, "child": pl.Int64}, orient="row")
+        graph = cls(table.with_columns(pl.lit("subsumes").alias("relation")))
+        if not edges:
+            graph.full_graph.add_node(nodes[0])
+        graph.subgraph[name] = graph.full_graph.copy()
+        graph.extraction = summary
+        return graph
 
     @staticmethod
-    def get_concept_set(data_object_dirs, output_folder = None):
+    def get_concept_set(data_object_dirs, output_folder=None, allow_partial=False, root_concept_id=441840):
+        """Read mapped concepts from every supplied PLP object, failing on incomplete input by default."""
         all_concept_ids = set()
+        if not data_object_dirs:
+            raise ValueError("Supply at least one PLP data object")
         for dir_path in data_object_dirs:
-            print(f"\nProcessing data object in {dir_path} ...")
             try:
-                data_ref = Graph._process_data_object(dir_path)
-                df = data_ref.collect()
-                concept_ids = df["conceptId"].to_list()
-                for cid in concept_ids:
-                    try:
-                        all_concept_ids.add(int(cid))
-                    except Exception as ex:
-                        print(f"Could not cast {cid} to int: {ex}")
-            except Exception as e:
-                print(f"An error occurred while processing {dir_path}: {e}")
+                df = Graph._process_data_object(dir_path).collect()
+                current = set()
+                for cid in df["conceptId"].drop_nulls():
+                    value = int(cid)
+                    if value != float(cid) or value < 0:
+                        raise ValueError("PLP concept IDs must be nonnegative integers")
+                    current.add(value)
+                all_concept_ids.update(current)
+            except Exception as error:
+                if not allow_partial:
+                    raise ValueError(f"Could not read the PLP covariate dictionary in {dir_path}") from error
+                warnings.warn(f"Skipping an unreadable PLP dictionary in {dir_path}: {error}", RuntimeWarning)
+        if not (all_concept_ids - {0}):
+            raise ValueError("PLP inputs contain no mapped concept IDs")
 
         # Remove the 0 value if present.
         all_concept_ids.discard(0)
-        # Add the root node concept id 441840 Clinical finding explicitly.
-        all_concept_ids.add(441840)
+        if root_concept_id is not None:
+            all_concept_ids.add(root_concept_id)
         all_concept_ids = sorted(list(all_concept_ids))
 
         if output_folder is not None:
@@ -175,19 +201,8 @@ class Graph:
         return all_concept_ids
 
     def ancestral_subgraph_from_plp_data(self, data_object_dirs, name="ancestral"):
-        """
-        data_object_dirs = [
-            "/Users/xxx/data/plp/yyy",
-            "/Users/xxx/data/plp/yyy",
-            "/Users/xxx/data/plp/yyy"
-        ]
-        :param data_object_dirs:
-        :param name:
-        :return result_df:
-        """
-
-
-        self.ancestral_subgraph(self.get_concept_set(data_object_dirs), name=name)
+        """Use mapped PLP concepts and all their ancestors."""
+        return self.ancestral_subgraph(self.get_concept_set(data_object_dirs), name=name)
 
     @staticmethod
     def _process_data_object(data_object_dir):
@@ -195,36 +210,26 @@ class Graph:
         if not zip_path.exists():
             raise FileNotFoundError(f"Zip file not found: {zip_path}")
 
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            tmpdir = Path(tmpdirname)
-            with ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(tmpdir)
-
-            sql_files = list(tmpdir.glob("*.sqlite")) + list(tmpdir.glob("*.duckdb"))
-            if not sql_files:
-                raise FileNotFoundError(
-                    "No supported SQL database file (.sqlite or .duckdb) found in the zip archive.")
-
-            data = str(sql_files[0])
-            print(f"Found database file: {data}")
-
-            if Path(data).suffix == ".sqlite":
-                data = quote(data)
-                data_ref = pl.read_database_uri(
-                    "SELECT * FROM covariateRef", uri=f"sqlite://{data}"
-                ).lazy()
-            elif Path(data).suffix == ".duckdb":
-                data = quote(data)
-                # Create a local copy for DuckDB.
-                destination = Path(data).parent.joinpath("python_copy.duckdb")
-                path_copy = Path(shutil.copy(data, destination))
-                conn = duckdb.connect(str(path_copy))
-                data_ref = conn.sql("SELECT * FROM covariateRef").pl().lazy()
-                conn.close()
-                path_copy.unlink()  # Remove the temporary copy.
+        with tempfile.TemporaryDirectory() as tmpdirname, ZipFile(zip_path) as archive:
+            members = [m for m in archive.infolist() if Path(m.filename).suffix in {".sqlite", ".duckdb"}
+                       and not m.is_dir()]
+            if len(members) != 1:
+                raise ValueError("Expected one SQLite or DuckDB database in the covariate archive")
+            target = Path(tmpdirname) / ("covariates" + Path(members[0].filename).suffix)
+            with archive.open(members[0]) as source, target.open("wb") as destination:
+                shutil.copyfileobj(source, destination)
+            if target.suffix == ".sqlite":
+                conn = sqlite3.connect(target.as_uri() + "?mode=ro", uri=True)
             else:
-                raise ValueError("Only .sqlite and .duckdb files are supported")
-            return data_ref
+                conn = duckdb.connect(str(target), read_only=True)
+            try:
+                query = 'SELECT DISTINCT conceptId AS "conceptId" FROM covariateRef'
+                # Materialize before the connection and temporary directory go away.
+                if target.suffix == ".duckdb":
+                    return conn.sql(query).pl().lazy()
+                return pl.read_database(query, conn).lazy()
+            finally:
+                conn.close()
 
     def print_nodes(self, graph_name="full"):
         graph = (
@@ -249,7 +254,7 @@ class Graph:
             )
         root_nodes = []
         for node_index in rustworkx_graph.node_indexes():
-            if rustworkx_graph.in_degree(node_index) == 0 and rustworkx_graph.out_degree(node_index) > 0:
+            if rustworkx_graph.in_degree(node_index) == 0 and (rustworkx_graph.out_degree(node_index) > 0 or rustworkx_graph.num_nodes() == 1):
                 root_nodes.append(rustworkx_graph[node_index])
         if len(root_nodes) == 0:
             raise ValueError("No root nodes found.")
@@ -261,6 +266,7 @@ class Graph:
 
     def save(self, file_path):
         data = {
+            "extraction": getattr(self, "extraction", None),
             "full_graph": {
                 "nodes": [self.full_graph[node_idx] for node_idx in self.full_graph.node_indexes()],
                 "edges": [
@@ -287,6 +293,8 @@ class Graph:
         with open(file_path, "rb") as f:
             data = pickle.load(f)
         inst = cls.__new__(cls)
+        if data.get("extraction") is not None:
+            inst.extraction = data["extraction"]
 
         inst.full_graph = rx.PyDiGraph()
         node_map = {}

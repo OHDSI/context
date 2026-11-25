@@ -1,78 +1,111 @@
-import torch
+from functools import cached_property
+
+import numpy as np
 import rustworkx as rx
-from torch.utils.data import Dataset
+import torch
+from torch.utils.data import Dataset, get_worker_info
+
 
 class GraphEmbeddingDataset(Dataset):
-    def __init__(
-            self,
-            graph: rx.PyDiGraph,
-            device: torch.device = torch.device("cpu"),
-            num_negative_samples: int = 10,
-            directed: bool = False):
-        super().__init__()
-
-        self.edges_list = torch.as_tensor(list(graph.edge_list()), device=device)
+    def __init__(self, graph: rx.PyDiGraph, device=torch.device("cpu"), num_negative_samples=10,
+                 directed=False, seed=None):
         self.device = device
-        self.num_nodes = graph.num_nodes()
-        self.num_edges = graph.num_edges()
-        self.num_negative_samples = num_negative_samples
-        self.directed_adjacency_matrix = self.create_sparse_adjacency_matrix(directed=True)
-        self.undirected_adjacency_matrix = self.create_sparse_adjacency_matrix(directed=False)
         self.directed = directed
+        self.num_negative_samples = num_negative_samples
+        if num_negative_samples < 1:
+            raise ValueError("At least one negative sample is required")
+        indices = list(graph.node_indices())
+        self.concept_ids = [graph[i] for i in indices]
+        self.num_nodes = len(indices)
+        if len(set(self.concept_ids)) != self.num_nodes:
+            raise ValueError("Graph node labels must be unique")
+        position = {index: row for row, index in enumerate(indices)}
+        pairs = [(position[s], position[t]) for s, t in graph.edge_list() if s != t]
+        if not pairs:
+            raise ValueError("The graph has no non-self edges")
+        pairs = np.asarray(pairs, dtype=np.int64)
+        _, first = np.unique(pairs, axis=0, return_index=True)
+        edges = pairs[np.sort(first)]
+        self._observed = edges
+        self.edges_list = torch.as_tensor(edges, dtype=torch.long, device=device)
+        self.num_edges = len(edges)
+        positives = edges if directed else np.unique(np.concatenate((edges, edges[:, ::-1])), axis=0)
 
-    def __len__(self) -> int:
+        # For a source with sorted blocked targets b[j], the r-th allowed node
+        # is r + count(b[j] - j <= r). Index the shifted lists once for all rows.
+        nodes = np.arange(self.num_nodes, dtype=np.int64)
+        blocked = np.sort(np.r_[positives[:, 0] * self.num_nodes + positives[:, 1],
+                                nodes * self.num_nodes + nodes])
+        counts = np.bincount(blocked // self.num_nodes, minlength=self.num_nodes)
+        self._offsets = np.cumsum(counts) - counts
+        self._available = self.num_nodes - counts
+        self._shifted = blocked - (np.arange(len(blocked)) - np.repeat(self._offsets, counts))
+        self._positives = positives[self._available[positives[:, 0]] > 0]
+        self.skipped_positives = len(positives) - len(self._positives)
+        self._rng = np.random.default_rng(seed)
+        self._worker_id = None
+
+    def __len__(self):
         return self.num_edges
+
+    @property
+    def training_size(self):
+        return len(self._positives)
 
     def create_sparse_adjacency_matrix(self, directed):
         indices = self.edges_list.T
         if not directed:
-            indices = torch.cat([indices, indices[[1, 0]]], dim=1)
-            indices = torch.unique(indices, dim=1)
-        values = torch.ones(indices.size(1), dtype=torch.float32, device=self.device)
-        return torch.sparse_coo_tensor(
-            indices=indices,
-            values=values,
-            size=(self.num_nodes, self.num_nodes),
-            device=self.device
-        ).coalesce()
+            indices = torch.unique(torch.cat((indices, indices.flip(0)), dim=1), dim=1)
+        return torch.sparse_coo_tensor(indices, torch.ones(indices.size(1), device=self.device),
+                                       (self.num_nodes, self.num_nodes)).coalesce()
+
+    @cached_property
+    def directed_adjacency_matrix(self):
+        return self.create_sparse_adjacency_matrix(True)
+
+    @cached_property
+    def undirected_adjacency_matrix(self):
+        return self.create_sparse_adjacency_matrix(False)
 
     def generate_adjacency_sets(self, directed):
-        adjacency_sets = [set() for _ in range(self.num_nodes)]
-        for edge in self.edges_list.cpu().numpy():
-            u, v = edge
-            adjacency_sets[u].add(v)
+        adjacency = [set() for _ in range(self.num_nodes)]
+        for source, target in self.edges_list.cpu().tolist():
+            adjacency[source].add(target)
             if not directed:
-                adjacency_sets[v].add(u)
-        return adjacency_sets
+                adjacency[target].add(source)
+        return adjacency
 
-    def sample_negative_uniform(self, batch_size: int):
-        negative_nodes = torch.randint(low=0, high=self.num_nodes,
-                                       size=(batch_size * self.num_negative_samples,),
-                                       device=self.device)
-        return negative_nodes
+    def sample_negative_uniform(self, batch_size):
+        """Unconditional draws, retained for callers of the original helper."""
+        return torch.randint(self.num_nodes, (batch_size * self.num_negative_samples,), device=self.device)
 
-    def __getitem__(self, idx: int):
-        batch_rel = self.edges_list[idx]
-        source_nodes = batch_rel[:, 0]
-        target_nodes = batch_rel[:, 1]
-        negative_target_nodes =  self.sample_negative_uniform(
-            batch_size=source_nodes.size(0))
-        source_nodes_expanded = source_nodes.unsqueeze(1).expand(-1, self.num_negative_samples).reshape(-1)
-        negative_edge_indices = torch.stack([source_nodes_expanded, negative_target_nodes], dim=0)
-        if self.directed:
-            negative_edge_indices_in_adj = self.directed_adjacency_matrix._indices()
-        else:
-            negative_edge_indices_in_adj = self.undirected_adjacency_matrix._indices()
-        adj_edge_keys = negative_edge_indices_in_adj[0] * self.num_nodes + negative_edge_indices_in_adj[1]
-        negative_edge_keys = negative_edge_indices[0] * self.num_nodes + negative_edge_indices[1]
-        mask = ~torch.isin(negative_edge_keys, adj_edge_keys)
-        mask = mask & (negative_edge_indices[0] != negative_edge_indices[1]) # also filter self edges
-        valid_negative_source_nodes = source_nodes_expanded[mask]
-        valid_negative_target_nodes = negative_target_nodes[mask]
-        positive_edges = torch.stack([source_nodes, target_nodes], dim=1)
-        negative_edges = torch.stack([valid_negative_source_nodes, valid_negative_target_nodes], dim=1)
-        positive_labels = torch.ones(positive_edges.size(0), device=self.device)
-        negative_labels = torch.zeros(negative_edges.size(0), device=self.device)
-        edges = torch.cat([positive_edges, negative_edges], dim=0)
-        labels = torch.cat([positive_labels, negative_labels], dim=0).bool()
+    def _sample(self, positives, rng):
+        sources = positives[:, :1]
+        if rng is None:
+            worker = get_worker_info()
+            if worker is not None and self._worker_id != worker.id:
+                self._rng = np.random.default_rng(worker.seed)
+                self._worker_id = worker.id
+            rng = self._rng
+        ranks = rng.integers(self._available[sources], size=(len(sources), self.num_negative_samples))
+        ends = np.searchsorted(self._shifted, sources * self.num_nodes + ranks, side="right")
+        return ranks + ends - self._offsets[sources]
+
+    def candidate_nodes(self, indices, rng=None):
+        """Draw K conditional negatives per positive indexed in [0, training_size)."""
+        positives = self._positives[indices].reshape(-1, 2)
+        negatives = self._sample(positives, rng)
+        return (torch.as_tensor(positives[:, :1], dtype=torch.long, device=self.device),
+                torch.as_tensor(np.column_stack((positives[:, 1], negatives)), device=self.device))
+
+    def __getitem__(self, idx):
+        # Preserve original edge indexing and the flat positives-first layout.
+        if isinstance(idx, torch.Tensor):
+            idx = idx.cpu().numpy()
+        observed = self._observed[idx].reshape(-1, 2)
+        eligible = observed[self._available[observed[:, 0]] > 0]
+        negatives = self._sample(eligible, None)
+        pairs = np.stack((np.broadcast_to(eligible[:, :1], negatives.shape), negatives), axis=-1)
+        edges = torch.as_tensor(np.concatenate((observed, pairs.reshape(-1, 2))), device=self.device)
+        labels = torch.arange(len(edges), device=self.device) < len(observed)
         return edges, labels

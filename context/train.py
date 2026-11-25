@@ -1,213 +1,242 @@
-from argparse import Namespace
-import csv
+"""Train either geometry on a shared concept graph and sampled-neighbor objective."""
+import hashlib
+import json
+import math
+import shutil
+from dataclasses import replace
 from pathlib import Path
+from tempfile import TemporaryDirectory, mkdtemp
 
-from hypll.manifolds.poincare_ball import Curvature, PoincareBall
-from hypll.optim import RiemannianSGD, RiemannianAdam
-import torch
-from torch.utils.data import DataLoader, BatchSampler, RandomSampler
-from tqdm import tqdm
+import numpy as np
 import polars as pl
+import torch
+from filelock import FileLock
+from hypll.optim import RiemannianAdam, RiemannianSGD
 
+from context.args import Args
 from context.dataset import GraphEmbeddingDataset
 from context.eval import evaluate_model
+from context.export import concept_labels, export_embedding, load_model, save_checkpoint
 from context.graph import Graph
-from context.loss import poincare_embeddings_loss
-from context.model import PoincareEmbedding
+from context.loss import candidate_loss
+from context.model import create_embedding
 from context.stopper import EarlyStopper
 
-def train(args: Namespace):
-    experiment_folder = Path(args.output_directory) / args.experiment_id
-    graph_file = experiment_folder / "graph.pkl"
-    experiment_folder.mkdir(parents=True, exist_ok=True)
-    eval_records = []
 
-    g = Graph.load(graph_file)
-    root_node_index = next(
-        node_index for node_index in g.subgraph[args.graph_id].node_indexes()
-        if g.subgraph[args.graph_id][node_index] == args.root_node_label
-    )
+def output_folder(args, geometry):
+    folder = Path(args.output_directory) / args.experiment_id
+    return folder if geometry == "hyperbolic" else folder / "euclidean"
 
-    dataset = GraphEmbeddingDataset(graph=g.subgraph[args.graph_id], num_negative_samples = args.negative_samples,
-                                    directed=args.directed)
-    dataloader = DataLoader(dataset, sampler=BatchSampler(sampler=RandomSampler(dataset), batch_size=args.batch_size,
-                                                          drop_last=False))
-    poincare_ball = PoincareBall(c=Curvature(args.curvature))
 
-    model = PoincareEmbedding(
-        num_embeddings=dataset.num_nodes,
-        embedding_dim=args.embedding_dim,
-        manifold=poincare_ball,
-        root_concept_index=root_node_index
-    )
-    if args.compile:
-        model = torch.compile(model, fullgraph=True)
+def build_graph(args):
+    ids = pl.read_csv(args.concept_id_file, columns=["conceptId"])["conceptId"].to_list()
+    if args.relationship_file_path:
+        if args.concept_map is None or args.root_node_label is None:
+            raise ValueError("SNOMED Is a extraction requires a concept_map and root_node_label")
+        return Graph.from_snomed_taxonomy(args.concept_map, args.relationship_file_path, ids,
+                                          args.root_node_label, args.graph_id)
+    return Graph.from_omop(args.hierarchy_file_path, ids, name=args.graph_id)
+
+
+def _validate(args):
+    if args.geometry not in ("euclidean", "hyperbolic", "both"):
+        raise ValueError(f"Unknown geometry {args.geometry!r}")
+    if args.optimizer not in ("sgd", "adam"):
+        raise ValueError(f"Unknown optimizer {args.optimizer!r}")
+    if min(args.epochs, args.save_top, args.batch_size, args.embedding_dim, args.negative_samples) < 1:
+        raise ValueError("epochs, save_top, batch_size, embedding_dim and negative_samples must be positive")
+    if not math.isfinite(args.learning_rate) or args.learning_rate <= 0:
+        raise ValueError("learning_rate must be finite and positive")
+    if args.burn_in and (args.burn_in_epochs < 0 or not math.isfinite(args.burn_in_lr_divisor)
+                         or args.burn_in_lr_divisor <= 0):
+        raise ValueError("Invalid burn-in schedule")
+    if args.eval_interval < 0 or args.lr_reduce_patience < 0 or args.early_stop_patience < 1:
+        raise ValueError("Invalid evaluation interval or patience")
+    if not 0 < args.lr_reduce_factor < 1:
+        raise ValueError("lr_reduce_factor must lie between zero and one")
+    if not args.model_file or Path(args.model_file).name != args.model_file:
+        raise ValueError("model_file must be a filename")
+
+
+def _args_with_defaults(args):
+    # Older callers pass a Namespace, sometimes with graph_id and concept_map as
+    # class attributes. Read attributes to preserve these configurations.
+    values = {name: getattr(args, name, default) for name, default in vars(Args()).items()}
+    return Args(**{k: str(v) if isinstance(v, Path) else v for k, v in values.items()})
+
+
+def geometry_settings(args, geometry):
+    filename = args.model_file
+    if geometry == "euclidean" and filename == Args.model_file:
+        filename = "euclidean_embeddings_snomed.pt"
+    return replace(args, geometry=geometry, model_file=filename)
+
+
+def train(args):
+    args = _args_with_defaults(args)
+    _validate(args)
+    folder = Path(args.output_directory) / args.experiment_id
+    folder.mkdir(parents=True, exist_ok=True)
+    with FileLock(folder / ".context.lock"):
+        graph_path = Path(args.graph_file) if args.graph_file else folder / "graph.pkl"
+        if args.graph_file or graph_path.exists():
+            graph = Graph.load(graph_path)
+        else:
+            graph = build_graph(args)
+            with TemporaryDirectory(dir=folder) as temporary:
+                path = Path(temporary) / "graph.pkl"
+                graph.save(path)
+                path.replace(graph_path)
+        with graph_path.open("rb") as stream:
+            graph_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        subgraph = graph.full_graph if args.graph_id == "full" else graph.subgraph[args.graph_id]
+        dataset = GraphEmbeddingDataset(subgraph, directed=args.directed, num_negative_samples=args.negative_samples)
+        if not dataset.training_size:
+            raise ValueError("No source with a positive edge has an eligible negative neighbor")
+        root = None
+        if args.root_node_label is not None:
+            if args.root_node_label not in dataset.concept_ids:
+                raise ValueError(f"Root {args.root_node_label!r} is absent from graph {args.graph_id!r}")
+            root = dataset.concept_ids.index(args.root_node_label)
+        labels = concept_labels(dataset.concept_ids, args.concept_map)
+        geometries = ("hyperbolic", "euclidean") if args.geometry == "both" else (args.geometry,)
+        records = []
+        for geometry in geometries:
+            settings = geometry_settings(args, geometry)
+            destination = output_folder(settings, geometry)
+            destination.mkdir(exist_ok=True)
+            stage = Path(mkdtemp(prefix=".context-fit-", dir=destination))
+            try:
+                records.extend(_fit(settings, dataset, root, labels, stage, graph_digest))
+                _publish(stage, destination, settings.model_file)
+            except BaseException:
+                if any((stage / "models").glob("*.pt")):
+                    print(f"Partial checkpoints retained in {stage}", flush=True)
+                else:
+                    shutil.rmtree(stage)
+                raise
+            shutil.rmtree(stage)
+        return records
+
+
+def _fit(args, dataset, root, labels, stage, graph_digest):
+    # Independent RNG streams keep paired runs on identical positives and negatives.
+    order = torch.Generator().manual_seed(args.seed)
+    negatives = np.random.default_rng(args.seed)
+    with torch.random.fork_rng(devices=[]):
+        torch.random.default_generator.manual_seed(args.seed)
+        model = create_embedding(dataset.num_nodes, args.embedding_dim, args.geometry, args.curvature, root)
     model = model.to(args.device)
-    if args.optimizer == 'adam':
-        optimizer_object = RiemannianAdam
+    forward = torch.compile(model) if args.compile else model
+    if args.geometry == "hyperbolic":
+        optimizer_class = {"sgd": RiemannianSGD, "adam": RiemannianAdam}[args.optimizer]
     else:
-        optimizer_object = RiemannianSGD
+        optimizer_class = {"sgd": torch.optim.SGD, "adam": torch.optim.Adam}[args.optimizer]
 
-    if args.burn_in:
-        optimizer = optimizer_object(
-            params=model.parameters(),
-            lr=args.learning_rate / args.burn_in_lr_divisor,
-        )
-        for epoch in range(1, args.burn_in_epochs + 1):
-            average_loss = torch.tensor(0.0, device=args.device)
-            for idx, (edges, edge_label_targets) in tqdm(enumerate(dataloader)):
-                edges = edges.to(args.device)
-                edge_label_targets = edge_label_targets.to(args.device)
-
-                optimizer.zero_grad()
-
-                dists = model(edges)
-                loss = poincare_embeddings_loss(distances=dists, targets=edge_label_targets)
-                loss.backward()
-                optimizer.step()
-
-                average_loss += loss.detach()
-
-            average_loss /= len(dataloader)
-            tqdm.write(f"Burn-in epoch {epoch} loss: {average_loss}")
-
-    # Now we use the actual learning rate
-    optimizer = optimizer_object(
-        params=model.parameters(),
-        lr=args.learning_rate# ,
-        # weight_decay=1e-4
-    )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-                                                           mode='min',
-                                                           factor=args.lr_reduce_factor,
-                                                           patience=args.lr_reduce_patience)
-    early_stopper = EarlyStopper(patience=args.early_stop_patience)
-    loss_per_epoch = torch.empty(args.epochs, device=args.device)
-    best_loss = float('inf')
-    best_epoch = 0
-    for epoch in range(1, args.epochs + 1):
-        average_loss = torch.tensor(0.0, device=args.device)
-        for idx, (edges, edge_label_targets) in tqdm(enumerate(dataloader), total=len(dataloader)):
-            edges = edges.to(args.device)
-            edge_label_targets = edge_label_targets.to(args.device)
-
-            optimizer.zero_grad()
-
-            dists = model(edges)
-            loss = poincare_embeddings_loss(distances=dists, targets=edge_label_targets)
+    def run_epoch(optimizer):
+        total = torch.zeros((), device=args.device)
+        for indices in torch.randperm(dataset.training_size, generator=order).split(args.batch_size):
+            sources, targets = dataset.candidate_nodes(indices.numpy(), negatives)
+            optimizer.zero_grad(set_to_none=True)
+            loss = candidate_loss(forward(sources.to(args.device), targets.to(args.device)))
             loss.backward()
             optimizer.step()
+            total += loss.detach() * len(indices)
+        mean = total.item() / dataset.training_size
+        if not math.isfinite(mean):
+            raise FloatingPointError("Non-finite embedding loss")
+        return mean
 
-            average_loss += loss.detach()
-        average_loss /= len(dataloader)
-        scheduler.step(average_loss)
-        if average_loss < best_loss:
-            best_loss = average_loss
-            best_epoch = epoch
-            save_model(model, args, experiment_folder, epoch, average_loss, loss_per_epoch)
+    if args.burn_in and args.burn_in_epochs:
+        optimizer = optimizer_class(model.parameters(), lr=args.learning_rate / args.burn_in_lr_divisor)
+        for epoch in range(1, args.burn_in_epochs + 1):
+            print(f"{args.geometry} burn-in {epoch}: {run_epoch(optimizer):.6f}", flush=True)
 
-        if epoch % args.eval_interval == 0:
-            tqdm.write(f"Evaluating model at epoch {epoch} ...")
-            mean_rank, map_score = evaluate_model(model, dataset, directed=False)
-            record = {
-                "epoch": epoch,
-                "mean_rank": mean_rank,
-                "map_score": map_score,
-                "loss": average_loss,
-                "experiment_id": args.experiment_id,
-                "graph_id": args.graph_id,
-                "directed": args.directed,
-                "root_node_label": args.root_node_label,
-                "learning_rate": args.learning_rate,
-                "burn_in": args.burn_in,
-                "burn_in_lr_divisor": args.burn_in_lr_divisor,
-                "burn_in_epochs": args.burn_in_epochs,
-                "batch_size": args.batch_size,
-                "embedding_dim": args.embedding_dim,
-                "curvature": args.curvature,
-                "negative_samples": args.negative_samples,
-                "optimizer": args.optimizer,
-                "early_stop_patience": args.early_stop_patience,
-                "lr_reduce_patience": args.lr_reduce_patience,
-                "lr_reduce_factor": args.lr_reduce_factor,
-            }
-            eval_records.append(record)
-            save_single_model(model, args, experiment_folder, epoch, average_loss, loss_per_epoch)
+    optimizer = optimizer_class(model.parameters(), lr=args.learning_rate)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, factor=args.lr_reduce_factor, patience=args.lr_reduce_patience)
+    stopper = EarlyStopper(patience=args.early_stop_patience)
+    losses, records, kept = [], [], []
+    (stage / "models").mkdir()
+    (stage / "eval_models").mkdir()
+    for epoch in range(1, args.epochs + 1):
+        loss = run_epoch(optimizer)
+        losses.append(loss)
+        save_model(model, args, stage, epoch, loss, losses, kept=kept)
 
-        if early_stopper.update(average_loss):
-            tqdm.write(f"Early stopping at epoch {epoch}")
+        if args.eval_interval and epoch % args.eval_interval == 0:
+            rank, ap = evaluate_model(model, dataset)
+            records.append({**vars(args), "curvature": None if model.curvature is None else model.curvature.item(),
+                            "epoch": epoch, "mean_rank": rank, "map_score": ap, "loss": loss})
+            save_single_model(model, args, stage, epoch, loss, losses)
+        print(f"{args.geometry} epoch {epoch}: {loss:.6f}", flush=True)
+        scheduler.step(loss)
+        if stopper.update(loss):
             break
-        tqdm.write(f"Epoch {epoch} loss: {average_loss} lr: {scheduler.get_last_lr()}")
-        loss_per_epoch[epoch-1] = average_loss
 
-    model.load_state_dict(
-        torch.load(experiment_folder.joinpath("models", f"epoch_{best_epoch}-loss_{best_loss:3f}-{args.model_file}"),
-                   weights_only=False)['state_dict'])
+    _, best_epoch, best_path = kept[0]
+    selected = load_model(best_path)
+    export_embedding(stage, selected, dataset.concept_ids, labels, best_epoch)
+    summary = {"settings": vars(args), "graph_sha256": graph_digest, "selected_epoch": best_epoch,
+               "training_loss": losses, "nodes": dataset.num_nodes, "graph_edges": dataset.num_edges,
+               "training_positives": dataset.training_size, "positives_without_negatives": dataset.skipped_positives,
+               "optimizer": optimizer_class.__name__}
+    (stage / "training.json").write_text(json.dumps(summary, indent=2, default=str) + "\n")
+    if records:
+        pl.DataFrame(records).write_csv(stage / "eval_metrics.csv")
+    return records
 
-    weights_np = model.weight.data.cpu().numpy()
-    vec_file_path = experiment_folder.joinpath("vec.tsv")
-    with open(vec_file_path, mode='w', newline='') as file:
-        writer = csv.writer(file, delimiter='\t')
-        for row in weights_np:
-            writer.writerow(row)
 
-    csv_path = args.concept_map
-    concept_df = pl.read_csv(csv_path, separator="\t", quote_char=None)
-    concept_dict = dict(zip(
-        concept_df["concept_id"].cast(pl.Int64).to_list(),
-        concept_df["concept_name"].to_list()
-    ))
+def _checkpoint_path(folder, args, epoch, loss):
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / f"epoch_{epoch}-loss_{loss:.6f}-{args.model_file}"
 
-    labels = [concept_dict[node_id] for node_id in g.subgraph[args.graph_id].nodes()]
-    df_labels = pl.DataFrame({"label": labels})
-    labels_file_path = experiment_folder.joinpath("labels.tsv")
-    df_labels.write_csv(str(labels_file_path), separator="\t", include_header=False)
 
-    if eval_records:
-        df_eval = pl.DataFrame(eval_records)
-        eval_csv_path = experiment_folder.joinpath("eval_metrics.csv")
-        df_eval.write_csv(str(eval_csv_path))
-        tqdm.write(f"Evaluation metrics saved to {eval_csv_path}")
-    else:
-        tqdm.write("No evaluation records were generated during training.")
+def save_model(model, args, experiment_folder, epoch, average_loss, loss_per_epoch, *, kept=None):
+    """Keep the best training checkpoints. The trainer reuses its in-memory ranking."""
+    folder = Path(experiment_folder) / "models"
+    if args.save_top < 1:
+        raise ValueError("save_top must be positive")
+    if kept is None:
+        kept = []
+        for path in folder.glob("epoch_*-loss_*-*"):
+            prefix, _, suffix = path.name.partition("-loss_")
+            loss, _, name = suffix.partition("-")
+            if name == args.model_file:
+                kept.append((float(loss), int(prefix.removeprefix("epoch_")), path))
+        kept.sort()
+    path = _checkpoint_path(folder, args, epoch, average_loss)
+    kept[:] = [entry for entry in kept if entry[2] != path]
+    if len(kept) >= args.save_top and average_loss >= kept[-1][0]:
+        return
+    save_checkpoint(path, model, args, epoch, loss_per_epoch)
+    kept.append((float(average_loss), epoch, path))
+    kept.sort()
+    while len(kept) > args.save_top:
+        kept.pop()[2].unlink()
 
-    return eval_records
-
-# def save_for_plp(embeddings, dataset, args):
-#     concept_ids = torch.as_tensor(list(nx.get_node_attributes(dataset.graph, 'concept_id').values()), dtype=torch.long)
-#     torch.save({'concept_ids': concept_ids, 'embeddings': embeddings}, 'poincare_embeddings_snomed_plp.pt')
-
-def save_model(model, args, experiment_folder, epoch, average_loss, loss_per_epoch):
-    models_dir = experiment_folder.joinpath("models")
-    models_dir.mkdir(parents=True, exist_ok=True)
-    # only keep top args.save_top models
-    saved_models = len(list(models_dir.glob(f"epoch_*-{args.model_file}")))
-    while saved_models >= args.save_top:
-        # find the worst loss value from filename of saved models
-        candidate_models = list(models_dir.glob(f"epoch_*-{args.model_file}"))
-        losses = [float(model.name.split('-')[1].split('_')[1]) for model in candidate_models]
-        worst_loss = max(losses)
-        worst_model = [model for model in candidate_models if float(model.name.split('-')[1].split('_')[1]) == worst_loss][0]
-        # remove the worst model
-        if worst_model.exists():
-            worst_model.unlink()
-        saved_models -= 1
-    torch.save({'state_dict': model.state_dict(),
-                'args': args.__dict__,
-                'losses': loss_per_epoch,
-                'epoch': epoch,
-                }, models_dir.joinpath(f"epoch_{epoch}-loss_{average_loss:3f}-{args.model_file}"))
 
 def save_single_model(model, args, experiment_folder, epoch, average_loss, loss_per_epoch):
-    models_dir = experiment_folder.joinpath("eval_models")
-    models_dir.mkdir(parents=True, exist_ok=True)
+    path = _checkpoint_path(Path(experiment_folder) / "eval_models", args, epoch, average_loss)
+    save_checkpoint(path, model, args, epoch, loss_per_epoch)
 
-    filename = f"epoch_{epoch}-loss_{average_loss:3f}-{args.model_file}"
-    file_path = models_dir.joinpath(filename)
 
-    torch.save({
-        'state_dict': model.state_dict(),
-        'args': args.__dict__,
-        'losses': loss_per_epoch,
-        'epoch': epoch,
-    }, file_path)
+def _publish(stage, destination, model_file):
+    # Compute the whole fit in staging. A failed fit leaves the last completed
+    # export in place. Publish the self-contained embedding last, atomically.
+    for name in ("models", "eval_models"):
+        target = destination / name
+        target.mkdir(exist_ok=True)
+        files = list((stage / name).iterdir())
+        names = {p.name for p in files}
+        for path in files:
+            path.replace(target / path.name)
+        for old in target.glob("epoch_*"):
+            if old.name.endswith("-" + model_file) and old.name not in names:
+                old.unlink()
+    for name in ("eval_metrics.csv", "labels.tsv", "vec.tsv", "training.json", "embedding.pt"):
+        path = stage / name
+        if path.exists():
+            path.replace(destination / name)
+        elif name == "eval_metrics.csv":
+            (destination / name).unlink(missing_ok=True)
