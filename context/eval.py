@@ -1,9 +1,9 @@
 import math
 
-import numpy as np
 import torch
 
 from context.model import pairwise_distance
+from context.retrieval import query_rows, rank_neighbors
 
 
 def _check_points(points, curvature):
@@ -35,40 +35,20 @@ def fast_average_precision(y_true, y_score):
 
 @torch.no_grad()
 def evaluate_mean_rank_and_map(dataset, embeddings, num_nodes, batch_size=128, directed=False,
-                               geometry="hyperbolic", curvature=1.0):
+                               geometry="hyperbolic", curvature=1.0, query_limit=0, query_seed=1):
     """Return filtered mean positive rank (edge-weighted) and MAP (query-weighted)."""
     if geometry not in ("euclidean", "hyperbolic"):
         raise ValueError(f"Unknown embedding geometry {geometry!r}")
     if num_nodes != len(embeddings) or num_nodes != dataset.num_nodes or batch_size < 1:
         raise ValueError("Graph and embedding sizes must match and batch size must be positive")
-    c = curvature if geometry == "hyperbolic" else None
-    dtype = torch.float32 if embeddings.device.type == "mps" else torch.float64
-    points = embeddings.to(dtype=dtype)
-    _check_points(points, c)
-    adjacency = dataset.generate_adjacency_sets(directed)
-    queries = [i for i, neighbors in enumerate(adjacency) if neighbors]
-    rank_sum = ap_sum = 0.0
-    positive_count = 0
-    for start in range(0, len(queries), batch_size):
-        batch = queries[start:start + batch_size]
-        rows = pairwise_distance(points[batch], points, c).cpu().numpy()
-        for source, row in zip(batch, rows):
-            neighbors = list(adjacency[source])
-            row[source] = np.inf
-            relevant = np.sort(row[neighbors])
-            ordered = np.sort(row)
-            left = ordered.searchsorted(relevant, "left") - relevant.searchsorted(relevant, "left")
-            through = ordered.searchsorted(relevant, "right")
-            positives_through = relevant.searchsorted(relevant, "right")
-            right = through - positives_through
-            rank_sum += (1 + (left + right) / 2).sum()
-            ap_sum += (positives_through / through).mean()
-            positive_count += len(neighbors)
-    return float(rank_sum / positive_count), float(ap_sum / len(queries))
+    adjacency = dataset.adjacency(directed)
+    result = rank_neighbors(embeddings.detach().cpu().numpy(), adjacency, query_rows(adjacency, query_limit, query_seed),
+                            curvature if geometry == "hyperbolic" else None, batch_size=min(32, batch_size))
+    return result["mean_rank"], result["macro_average_precision"]
 
 
-def evaluate_model(model, dataset, batch_size=64, directed=None):
-    c = None if model.curvature is None else model.curvature.item()
+def evaluate_model(model, dataset, batch_size=64, directed=None, query_limit=0, query_seed=1):
+    curvature = None if model.curvature is None else model.curvature.item()
     return evaluate_mean_rank_and_map(dataset, model.coordinates().detach(), dataset.num_nodes,
                                       batch_size, dataset.directed if directed is None else directed,
-                                      model.geometry, c)
+                                      model.geometry, curvature, query_limit, query_seed)

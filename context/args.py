@@ -39,3 +39,20 @@ class Args:
     euclidean_root: Literal["fixed", "trainable"] = field(
         default="fixed", metadata={"help": "Training policy for the Euclidean root selected by --root_node_label."}
     )
+    taxonomy_scope: Literal["seeds", "subtree", "all"] = field(
+        default="seeds", metadata={"help": "Seed-to-root paths, all root descendants, or every active standard SNOMED node."}
+    )
+    eval_queries: int = field(default=256, metadata={"help": "Maximum fixed evaluation queries; zero ranks every eligible query."})
+    query_seed: int = 2
+    validation_fraction: float = field(default=0.0, metadata={"help": "Fraction each for validation and test edges; zero trains all edges."})
+    split_seed: int = 1
+    split_policy: Literal["random", "preserve_degrees"] = "random"
+    retrieval_direction: Literal["observed", "parents", "children"] = "observed"
+    resume: bool = field(default=False, metadata={"help": "Continue matching saved epoch state or reuse a completed fit."})
+    checkpoint_interval: int = field(default=10, metadata={"help": "Main or burn-in epochs between durable recovery points, including epoch one."})
+    sgd_updates: Literal["auto", "dense", "sparse"] = field(default="auto", metadata={"help": "Update touched rows for large sparse SGD batches on CPU or CUDA."})
+    refit_from: str | None = field(default=None, metadata={"help": "Refit all edges using the selected run in this directory."})
+    euclidean_distance_scale: float = field(default=1.0, metadata={"help": "Positive L2 multiplier in the Euclidean objective."})
+    write_tsv: bool = field(default=True, metadata={"help": "Write projector TSV files alongside the ID-keyed tensor export."})
+    threads: int | None = field(default=None, metadata={"help": "CPU threads used by PyTorch during fitting."})
+    keep_eval_models: bool = field(default=True, metadata={"help": "Retain checkpoints from every scored epoch in addition to the selected model."})

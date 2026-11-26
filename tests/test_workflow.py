@@ -131,7 +131,7 @@ def test_interrupted_update_keeps_last_export_and_partial_checkpoint(settings, m
     folder = Path(args.output_directory) / args.experiment_id / "euclidean"
     original = (folder / "embedding.pt").read_bytes()
 
-    def interrupt(*args):
+    def interrupt(*args, **kwargs):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(module, "evaluate_model", interrupt)

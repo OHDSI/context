@@ -2,6 +2,7 @@ from functools import cached_property
 
 import numpy as np
 import rustworkx as rx
+from scipy.sparse import csr_matrix
 import torch
 from torch.utils.data import Dataset, get_worker_info
 
@@ -9,39 +10,70 @@ from torch.utils.data import Dataset, get_worker_info
 class GraphEmbeddingDataset(Dataset):
     def __init__(self, graph: rx.PyDiGraph, device=torch.device("cpu"), num_negative_samples=10,
                  directed=False, seed=None):
+        indices = np.asarray(graph.node_indices(), dtype=np.int64)
+        pairs = np.asarray(graph.edge_list(), dtype=np.int64).reshape(-1, 2)
+        if len(indices) and indices[-1] != len(indices) - 1:
+            pairs = np.searchsorted(indices, pairs)
+        self._initialize(list(graph.nodes()), pairs, device, num_negative_samples, directed, seed)
+
+    def with_training_edges(self, edges):
+        dataset = type(self).__new__(type(self))
+        dataset._initialize(self.concept_ids, edges, self.device, self.num_negative_samples, self.directed, None)
+        return dataset
+
+    def _initialize(self, concept_ids, pairs, device, num_negative_samples, directed, seed):
         self.device = device
         self.directed = directed
         self.num_negative_samples = num_negative_samples
         if num_negative_samples < 1:
             raise ValueError("At least one negative sample is required")
-        indices = list(graph.node_indices())
-        self.concept_ids = [graph[i] for i in indices]
-        self.num_nodes = len(indices)
-        if len(set(self.concept_ids)) != self.num_nodes:
+        self.concept_ids = concept_ids
+        self.num_nodes = len(concept_ids)
+        if len(set(concept_ids)) != self.num_nodes:
             raise ValueError("Graph node labels must be unique")
-        position = {index: row for row, index in enumerate(indices)}
-        pairs = [(position[s], position[t]) for s, t in graph.edge_list() if s != t]
-        if not pairs:
-            raise ValueError("The graph has no non-self edges")
         pairs = np.asarray(pairs, dtype=np.int64)
-        _, first = np.unique(pairs, axis=0, return_index=True)
-        edges = pairs[np.sort(first)]
-        self._observed = edges
-        self.edges_list = torch.as_tensor(edges, dtype=torch.long, device=device)
-        self.num_edges = len(edges)
-        positives = edges if directed else np.unique(np.concatenate((edges, edges[:, ::-1])), axis=0)
-
-        nodes = np.arange(self.num_nodes, dtype=np.int64)
-        blocked = np.sort(np.r_[positives[:, 0] * self.num_nodes + positives[:, 1],
-                                nodes * self.num_nodes + nodes])
-        counts = np.bincount(blocked // self.num_nodes, minlength=self.num_nodes)
-        self._offsets = np.cumsum(counts) - counts
-        self._available = self.num_nodes - counts
-        self._shifted = blocked - (np.arange(len(blocked)) - np.repeat(self._offsets, counts))
-        self._positives = positives[self._available[positives[:, 0]] > 0]
+        if pairs.ndim != 2 or pairs.shape[1] != 2 or (pairs.size and (pairs.min() < 0 or pairs.max() >= self.num_nodes)):
+            raise ValueError("Expected edges between existing concept rows")
+        pairs = pairs[pairs[:, 0] != pairs[:, 1]]
+        if not len(pairs):
+            raise ValueError("The graph has no non-self edges")
+        edge_keys = pairs[:, 0] * self.num_nodes + pairs[:, 1]
+        unique_keys, first = np.unique(edge_keys, return_index=True)
+        self._observed = pairs[np.sort(first)] if len(first) < len(pairs) else pairs
+        self.edges_list = torch.as_tensor(self._observed, dtype=torch.long, device=device)
+        self.num_edges = len(self._observed)
+        if not directed:
+            reverse_keys = self._observed[:, 1] * self.num_nodes + self._observed[:, 0]
+            unique_keys = np.union1d(unique_keys, reverse_keys)
+        self.neighbor_rows = self._neighbor_index(unique_keys)
+        positives = self._observed if directed else np.column_stack(divmod(unique_keys, self.num_nodes))
+        node_rows = np.arange(self.num_nodes, dtype=np.int64)
+        blocked_keys = np.union1d(unique_keys, node_rows * (self.num_nodes + 1))
+        blocked_counts = np.diff(self.neighbor_rows.indptr).astype(np.int64) + 1
+        self._blocked_offsets = blocked_counts.cumsum() - blocked_counts
+        self._available_counts = self.num_nodes - blocked_counts
+        within_row = np.arange(len(blocked_keys)) - np.repeat(self._blocked_offsets, blocked_counts)
+        self._complement_thresholds = blocked_keys % self.num_nodes - within_row
+        self._global_thresholds = blocked_keys - within_row
+        self._positives = positives[self._available_counts[positives[:, 0]] > 0]
         self.skipped_positives = len(positives) - len(self._positives)
         self._rng = np.random.default_rng(seed)
         self._worker_id = None
+
+    def _neighbor_index(self, sorted_keys):
+        source_rows, target_rows = divmod(sorted_keys, self.num_nodes)
+        offsets = np.r_[0, np.cumsum(np.bincount(source_rows, minlength=self.num_nodes))]
+        return csr_matrix((np.ones(len(target_rows), dtype=bool), target_rows, offsets),
+                          shape=(self.num_nodes, self.num_nodes))
+
+    def adjacency(self, directed):
+        if directed == self.directed:
+            return self.neighbor_rows
+        sources, targets = self._observed.T
+        keys = sources * self.num_nodes + targets
+        if not directed:
+            keys = np.concatenate((keys, targets * self.num_nodes + sources))
+        return self._neighbor_index(np.unique(keys))
 
     def __len__(self):
         return self.num_edges
@@ -84,9 +116,25 @@ class GraphEmbeddingDataset(Dataset):
                 self._rng = np.random.default_rng(worker.seed)
                 self._worker_id = worker.id
             rng = self._rng
-        ranks = rng.integers(self._available[sources], size=(len(sources), self.num_negative_samples))
-        ends = np.searchsorted(self._shifted, sources * self.num_nodes + ranks, side="right")
-        return ranks + ends - self._offsets[sources]
+        ranks = rng.integers(self._available_counts[sources], size=(len(sources), self.num_negative_samples))
+        negatives = ranks.copy()
+        counts = self.num_nodes - self._available_counts[sources[:, 0]]
+        small = counts <= 16
+        offsets = self._blocked_offsets[sources[:, 0]]
+        if small.any():
+            small_ranks = ranks[small]
+            small_offsets = offsets[small]
+            small_counts = counts[small]
+            shift = np.zeros_like(small_ranks)
+            for position in range(int(small_counts.max())):
+                active = small_counts > position
+                thresholds = self._complement_thresholds[small_offsets[active] + position]
+                shift[active] += small_ranks[active] >= thresholds[:, None]
+            negatives[small] += shift
+        if not small.all():
+            keys = sources[~small] * self.num_nodes + ranks[~small]
+            negatives[~small] += np.searchsorted(self._global_thresholds, keys, side="right") - offsets[~small, None]
+        return negatives
 
     def candidate_nodes(self, indices, rng=None):
         """Return source rows and target rows with the observed neighbor in column zero."""
@@ -99,7 +147,7 @@ class GraphEmbeddingDataset(Dataset):
         if isinstance(idx, torch.Tensor):
             idx = idx.cpu().numpy()
         observed = self._observed[idx].reshape(-1, 2)
-        eligible = observed[self._available[observed[:, 0]] > 0]
+        eligible = observed[self._available_counts[observed[:, 0]] > 0]
         negatives = self._sample(eligible, None)
         pairs = np.stack((np.broadcast_to(eligible[:, :1], negatives.shape), negatives), axis=-1)
         edges = torch.as_tensor(np.concatenate((observed, pairs.reshape(-1, 2))), device=self.device)

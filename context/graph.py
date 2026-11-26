@@ -1,3 +1,6 @@
+from itertools import islice, repeat
+
+import numpy as np
 import rustworkx as rx
 import time
 import pickle
@@ -11,7 +14,7 @@ from tqdm import tqdm
 from pathlib import Path
 from zipfile import ZipFile
 
-from context.taxonomy import rooted_snomed_edges
+from context.taxonomy import snomed_taxonomy
 
 class Graph:
     def __init__(self, hierarchy):
@@ -118,9 +121,27 @@ class Graph:
         plt.show()
 
     def selective_subgraph(self, concept_ids, name="selective"):
-        # todo: a subgraph that only contains the nodes specified in concept_ids and must create new edges between them.
-        #  It may be best to use ancestral subgraph as basis.
-        return None
+        concepts = set(concept_ids)
+        graph = self.full_graph
+        selected = rx.PyDiGraph(multigraph=False)
+        rows = {index: selected.add_node(graph[index]) for index in graph.node_indices() if graph[index] in concepts}
+        nearest = {}
+        try:
+            order = rx.topological_sort(graph)
+        except rx.DAGHasCycle as error:
+            raise ValueError("Selecting taxonomy ancestors requires an acyclic graph") from error
+        for node in order:
+            ancestors = nearest.pop(node, set())
+            if node in rows:
+                for ancestor in sorted(ancestors):
+                    relation = graph.get_edge_data(ancestor, node) if graph.has_edge(ancestor, node) else "ancestor_path"
+                    selected.add_edge(rows[ancestor], rows[node], relation)
+                ancestors = {node}
+            if ancestors:
+                for child in graph.successor_indices(node):
+                    nearest.setdefault(child, set()).update(ancestors)
+        self.subgraph[name] = selected
+        return selected
 
     def ancestral_subgraph(self, nodes, name="ancestral"):
         lookup = {self.full_graph[i]: i for i in self.full_graph.node_indexes()}
@@ -148,12 +169,15 @@ class Graph:
         return graph
 
     @classmethod
-    def from_snomed_taxonomy(cls, concept_file, relationship_file, concept_ids, root=441840, name="ancestral"):
-        edges, nodes, summary = rooted_snomed_edges(concept_file, relationship_file, concept_ids, root)
-        table = pl.DataFrame(edges, schema={"parent": pl.Int64, "child": pl.Int64}, orient="row")
+    def from_snomed_taxonomy(cls, concept_file, relationship_file, concept_ids=None, root=441840, name="ancestral", *,
+                             include_all=False):
+        if include_all and concept_ids is not None:
+            raise ValueError("Use concept seeds or request the entire SNOMED vocabulary")
+        table, nodes, summary = snomed_taxonomy(concept_file, relationship_file, concept_ids, root, include_all)
         graph = cls(table.with_columns(pl.lit("subsumes").alias("relation")))
-        if not edges:
-            graph.full_graph.add_node(nodes[0])
+        if summary["isolated_nodes"]:
+            existing = set(graph.full_graph.nodes())
+            graph.full_graph.add_nodes_from([int(node) for node in nodes if node not in existing])
         graph.subgraph[name] = graph.full_graph.copy()
         graph.extraction = summary
         return graph
@@ -161,6 +185,8 @@ class Graph:
     @staticmethod
     def get_concept_set(data_object_dirs, output_folder=None, allow_partial=False, root_concept_id=441840):
         all_concept_ids = set()
+        if isinstance(data_object_dirs, (str, Path)):
+            data_object_dirs = [data_object_dirs]
         if not data_object_dirs:
             raise ValueError("Supply at least one PLP data object")
         for dir_path in data_object_dirs:
@@ -200,29 +226,32 @@ class Graph:
 
     @staticmethod
     def _process_data_object(data_object_dir):
-        zip_path = Path(data_object_dir) / "covariates"
-        if not zip_path.exists():
-            raise FileNotFoundError(f"Zip file not found: {zip_path}")
-
-        with tempfile.TemporaryDirectory() as tmpdirname, ZipFile(zip_path) as archive:
-            members = [m for m in archive.infolist() if Path(m.filename).suffix in {".sqlite", ".duckdb"}
-                       and not m.is_dir()]
+        source_path = Path(data_object_dir)
+        if source_path.is_dir():
+            source_path /= "covariates"
+        if source_path.suffix.lower() in (".sqlite", ".duckdb"):
+            return Graph._read_dictionary(source_path)
+        with tempfile.TemporaryDirectory() as temporary, ZipFile(source_path) as archive:
+            members = [member for member in archive.infolist()
+                       if Path(member.filename).suffix.lower() in {".sqlite", ".duckdb"} and not member.is_dir()]
             if len(members) != 1:
                 raise ValueError("Expected one SQLite or DuckDB database in the covariate archive")
-            target = Path(tmpdirname) / ("covariates" + Path(members[0].filename).suffix)
+            target = Path(temporary) / ("covariates" + Path(members[0].filename).suffix.lower())
             with archive.open(members[0]) as source, target.open("wb") as destination:
-                shutil.copyfileobj(source, destination)
-            if target.suffix == ".sqlite":
-                conn = sqlite3.connect(target.as_uri() + "?mode=ro", uri=True)
-            else:
-                conn = duckdb.connect(str(target), read_only=True)
-            try:
-                query = 'SELECT DISTINCT conceptId AS "conceptId" FROM covariateRef'
-                if target.suffix == ".duckdb":
-                    return conn.sql(query).pl().lazy()
-                return pl.read_database(query, conn).lazy()
-            finally:
-                conn.close()
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
+            return Graph._read_dictionary(target)
+
+    @staticmethod
+    def _read_dictionary(path):
+        sqlite = path.suffix.lower() == ".sqlite"
+        connection = (sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) if sqlite
+                      else duckdb.connect(str(path), read_only=True))
+        try:
+            query = 'SELECT DISTINCT conceptId AS "conceptId" FROM covariateRef'
+            data = pl.read_database(query, connection) if sqlite else connection.sql(query).pl()
+            return data.lazy()
+        finally:
+            connection.close()
 
     def print_nodes(self, graph_name="full"):
         graph = (
@@ -257,55 +286,71 @@ class Graph:
         print(f"Root node: {root_nodes[0]}")
         return root_nodes[0]
 
+    @staticmethod
+    def _pack_graph(graph):
+        indices = np.asarray(graph.node_indices())
+        edges = np.asarray(graph.edge_list(), dtype=np.uint32).reshape(-1, 2)
+        if len(indices) and indices[-1] != len(indices) - 1:
+            edges = np.searchsorted(indices, edges).astype(np.uint32)
+        payloads = list(graph.edges())
+        packed = {"nodes": list(graph.nodes()), "endpoints": edges}
+        common = payloads[0] if payloads else None
+        if isinstance(common, (int, float, str, bytes, type(None))) and all(
+            type(value) is type(common) and value == common for value in payloads
+        ):
+            packed["edge_value"] = common
+        else:
+            packed["edge_values"] = payloads
+        return packed
+
     def save(self, file_path):
-        data = {
-            "extraction": getattr(self, "extraction", None),
-            "full_graph": {
-                "nodes": [self.full_graph[node_idx] for node_idx in self.full_graph.node_indexes()],
-                "edges": [
-                    (self.full_graph[source], self.full_graph[target], edge_data)
-                    for source, target, edge_data in self.full_graph.weighted_edge_list()
-                ],
-            },
-            "subgraphs": {
-                name: {
-                    "nodes": [sub[node_idx] for node_idx in sub.node_indexes()],
-                    "edges": [
-                        (sub[source], sub[target], edge_data)
-                        for source, target, edge_data in sub.weighted_edge_list()
-                    ],
-                }
-                for name, sub in self.subgraph.items()
-            },
-        }
-        with open(file_path, "wb") as f:
-            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        full = self._pack_graph(self.full_graph)
+        subgraphs = {}
+        for name, graph in self.subgraph.items():
+            packed = self._pack_graph(graph)
+            same_graph = ("edge_value" in full and "edge_value" in packed and
+                          type(full["edge_value"]) is type(packed["edge_value"]) and
+                          full["edge_value"] == packed["edge_value"] and packed["nodes"] == full["nodes"] and
+                          np.array_equal(packed["endpoints"], full["endpoints"]))
+            subgraphs[name] = None if same_graph else packed
+        data = {"format_version": 2, "extraction": getattr(self, "extraction", None),
+                "source_inputs": getattr(self, "source_inputs", None), "full_graph": full, "subgraphs": subgraphs}
+        destination = Path(file_path)
+        with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
+            path = Path(temporary) / "graph.pkl"
+            with path.open("wb") as stream:
+                pickle.dump(data, stream, protocol=pickle.HIGHEST_PROTOCOL)
+            path.replace(destination)
+
+    @staticmethod
+    def _unpack_graph(data):
+        graph = rx.PyDiGraph()
+        graph.add_nodes_from(data["nodes"])
+        if "endpoints" in data:
+            sources, targets = data["endpoints"].T
+            values = repeat(data["edge_value"]) if "edge_value" in data else data["edge_values"]
+            for start in range(0, len(sources), 65536):
+                stop = start + 65536
+                payloads = values if "edge_value" in data else values[start:stop]
+                graph.add_edges_from(list(zip(sources[start:stop].tolist(), targets[start:stop].tolist(), payloads)))
+        else:
+            rows = {node: index for index, node in enumerate(data["nodes"])}
+            edges = ((rows[source], rows[target], value) for source, target, value in data["edges"])
+            while batch := list(islice(edges, 65536)):
+                graph.add_edges_from(batch)
+        return graph
 
     @classmethod
     def load(cls, file_path):
-        with open(file_path, "rb") as f:
-            data = pickle.load(f)
-        inst = cls.__new__(cls)
+        with open(file_path, "rb") as stream:
+            data = pickle.load(stream)
+        if data.get("format_version", 1) not in (1, 2):
+            raise ValueError("Unsupported graph file version")
+        instance = cls.__new__(cls)
         if data.get("extraction") is not None:
-            inst.extraction = data["extraction"]
-
-        inst.full_graph = rx.PyDiGraph()
-        node_map = {}
-        for node in data["full_graph"]["nodes"]:
-            new_index = inst.full_graph.add_node(node)
-            node_map[node] = new_index
-        for src, tgt, edge_data in data["full_graph"]["edges"]:
-            inst.full_graph.add_edge(node_map[src], node_map[tgt], edge_data)
-
-        inst.subgraph = {}
-        for name, sgdata in data["subgraphs"].items():
-            sub = rx.PyDiGraph()
-            sub_node_map = {}
-            for node in sgdata["nodes"]:
-                new_index = sub.add_node(node)
-                sub_node_map[node] = new_index
-            for src, tgt, edge_data in sgdata["edges"]:
-                sub.add_edge(sub_node_map[src], sub_node_map[tgt], edge_data)
-            inst.subgraph[name] = sub
-
-        return inst
+            instance.extraction = data["extraction"]
+        instance.source_inputs = data.get("source_inputs")
+        instance.full_graph = cls._unpack_graph(data["full_graph"])
+        instance.subgraph = {name: instance.full_graph.copy() if graph is None else cls._unpack_graph(graph)
+                             for name, graph in data["subgraphs"].items()}
+        return instance

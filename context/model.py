@@ -35,11 +35,12 @@ class _EdgeDistances:
         chord = torch.linalg.vector_norm(left - right, dim=-1)
         c = self.curvature
         if c is None:
-            return chord
+            return chord if self.distance_scale == 1.0 else chord * self.distance_scale
         return _ball_distance(chord, _margin(left, c), _margin(right, c), c)
 
     def _lookup(self, indices):
-        points = F.embedding(indices, self.coordinates(), padding_idx=self.root_concept_index)
+        points = F.embedding(indices, self.coordinates(), padding_idx=self.root_concept_index,
+                             sparse=getattr(self, "sparse_gradients", False))
         if points.device.type == "mps" and self.root_concept_index is not None:
             points = points.masked_fill((indices == self.root_concept_index).unsqueeze(-1), 0.0)
         return points
@@ -79,7 +80,10 @@ class EuclideanEmbedding(_EdgeDistances, torch.nn.Embedding):
     geometry = "euclidean"
     curvature = None
 
-    def __init__(self, num_embeddings, embedding_dim, root_concept_index=None):
+    def __init__(self, num_embeddings, embedding_dim, root_concept_index=None, distance_scale=1.0):
+        if not math.isfinite(distance_scale) or distance_scale <= 0:
+            raise ValueError("Euclidean distance scale must be finite and positive")
+        self.distance_scale = float(distance_scale)
         super().__init__(num_embeddings, embedding_dim)
         self._anchor(root_concept_index)
 
@@ -93,11 +97,11 @@ class EuclideanEmbedding(_EdgeDistances, torch.nn.Embedding):
 
 
 def create_embedding(num_embeddings, embedding_dim, geometry="hyperbolic", curvature=1.0,
-                     root_concept_index=None):
+                     root_concept_index=None, euclidean_distance_scale=1.0):
     if num_embeddings < 1 or embedding_dim < 1:
         raise ValueError("Embedding table dimensions must be positive")
     if geometry == "euclidean":
-        return EuclideanEmbedding(num_embeddings, embedding_dim, root_concept_index)
+        return EuclideanEmbedding(num_embeddings, embedding_dim, root_concept_index, euclidean_distance_scale)
     if geometry != "hyperbolic":
         raise ValueError(f"Unknown embedding geometry {geometry!r}")
     curvature = torch.tensor(float(curvature), dtype=torch.float32).item()

@@ -1,28 +1,25 @@
 import hashlib
-import json
 from dataclasses import replace
 from itertools import product
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from filelock import FileLock
 
 import polars as pl
 import simple_parsing
 
 from context.args import Args
-from context.train import build_graph, geometry_settings, output_folder, train
+from context.export import file_sha
+from context.recovery import completed_records, fit_identity
+from context.train import graph_for_run, geometry_settings, output_folder, train
 
 
 def cached_metrics(settings, graph_digest):
     folder = output_folder(settings, settings.geometry)
-    summary = folder / "training.json"
-    if not summary.exists() or not (folder / "embedding.pt").exists():
+    if not (folder / "training.json").is_file():
         return None
-    info = json.loads(summary.read_text())
-    info["settings"].setdefault("euclidean_root", "fixed")
-    if info["graph_sha256"] != graph_digest or info["settings"] != vars(settings):
-        return None
-    metrics = folder / "eval_metrics.csv"
-    return pl.read_csv(metrics).to_dicts() if metrics.exists() else []
+    labels = file_sha(settings.concept_map) if settings.concept_map else None
+    identity = fit_identity(settings, graph_digest, None, {"selection": None, "labels": labels})
+    return completed_records(folder, identity)
 
 
 def main():
@@ -30,11 +27,9 @@ def main():
     output = Path(args.output_directory)
     output.mkdir(parents=True, exist_ok=True)
     graph_path = Path(args.graph_file) if args.graph_file else output / "graph.pkl"
-    if not args.graph_file and not graph_path.exists():
-        with TemporaryDirectory(dir=output) as tmp:
-            path = Path(tmp) / "graph.pkl"
-            build_graph(args).save(path)
-            path.replace(graph_path)
+    if not args.graph_file:
+        with FileLock(output / ".context-graph.lock"):
+            graph_for_run(args, graph_path)
     with graph_path.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     geometries = ("hyperbolic", "euclidean") if args.geometry == "both" else (args.geometry,)
