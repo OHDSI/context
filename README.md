@@ -49,6 +49,41 @@ The Poincaré table goes to `output/taxonomy/landmark/embedding.pt` and the Eucl
 - **Resolution.** The first landmark is the named root when supplied. Farthest-point selection covers the graph, with ties resolved by the seed. The default budget is the smaller of the concept count and `max(64, 2 × embedding_dim + 1)`. More landmarks can distinguish additional branches. Identical landmark-distance profiles produce identical coordinates. The receipt records unique profiles, distinct exported vectors, the number of concepts sharing a vector, the largest such group and the effective spectral dimension. Rank-deficient graphs are zero-padded to retain the requested export width. Eigenvector orientation can vary with the numerical libraries.
 - **Scale and evaluation.** With *N* nodes and *L* landmarks the hop table holds *N × L* 32-bit integers. Only the *L × L* landmark matrix is factorized. Use `--write_tsv false` for tensor-only transfer. A validation split is applied before forming any landmark distances or links across components. Reciprocal edges are assigned to the same fold. Use the existing validation/refit workflow below to select the geometry and budget and then refit on all edges.
 
+## Historical Euclidean baselines and controls
+
+Select `--geometry euclidean --device cpu` and one of the following values for `--training_method`. All methods use the same graph input, fixed or free Euclidean origin, content-checked export and graph-only holdout/refit interface. Vectors for each method are saved in `output/<experiment>/<method>/euclidean/embedding.pt`. The graph stores parent-to-child links. Its orientation is available to HOPE and the ancestor baseline even when reconstruction is scored in both directions.
+
+| Method | Coordinates and controls | Limitation to inspect |
+| --- | --- | --- |
+| `random` | Seeded Gaussian concept-ID vectors; independent of graph edges for a fixed concept set. | A reference for what the downstream architecture can learn from code identity alone. |
+| `adjacency_svd` | Left singular vectors of the undirected adjacency, scaled by square roots of the singular values. | Nodes with identical neighborhoods can coincide. Common hubs influence the leading axes. |
+| `laplacian` | Laplacian Eigenmaps, solving the degree-weighted graph eigenproblem. Nonconstant modes encourage smooth variation over direct links. | Isolates have zero native coordinates. Between-component placement is unconstrained. Small spectral gaps can slow convergence. Inspect the recorded eigen residual and tune `--spectral_iterations` and `--spectral_tolerance`. |
+| `fastrp` | FastRP with a sparse ternary projection (density 1/3), degree weighting and equal weights for walk powers 1 through `--diffusion_steps`. Tune `--degree_exponent`. | Longer walks can blur subtype differences; sparse projections can yield ties in small dimensions. |
+| `ancestor` | A study baseline combining a Gaussian code vector with the weighted average of its parents and more distant ancestors. Every parent contributes. `--ancestor_mix` goes from 0 (identity) to 1 (pure ancestor signal). `--ancestor_decay` and `--diffusion_steps` control reach. | Multiple paths affect the weights. Siblings with the same parents can coincide under pure pooling. Roots retain their identity vector. |
+| `hope` | HOPE with directed Katz proximity, summing parent-to-descendant path counts weighted by `--katz_beta` to the power of path length. Sparse triangular solves on a DAG and low-rank SVD avoid constructing the full closure. | This implementation requires a DAG. Alternate paths amplify a relationship; the strength depends on beta. |
+| `deepwalk` | Uniform undirected walks and Skip-gram with hierarchical softmax. The softmax tree models token frequencies. | The walk context can be dominated by common nodes. |
+| `node2vec` | Second-order walks with return parameter `--return_p` and outward parameter `--inout_q`, and Skip-gram with negative sampling. | `p`, `q`, walk length and window change the neighborhoods being learned. |
+
+For HOPE, each endpoint role receives half the requested width, rounded down; an odd trailing column is zero. To recover a native directed score, undo the Euclidean translation and scaling with `native = exported * distance_scale + native_origin`. Take the dot product of the source half for a parent with the target half for a child. The standard package retrieval metric remains Euclidean distance so all exported point tables can be compared on a common score. For both SVD methods the solver uses exact factorization for graphs of at most 256 nodes and randomized block SVD above that threshold. Tune `--svd_iterations` for approximation quality. Laplacian Eigenmaps uses a sparse symmetric eigensolver above the small-graph threshold.
+
+```sh
+uv sync --frozen --extra walks
+uv run --frozen --extra walks python -m context --graph_file graph.pkl --geometry euclidean \
+  --training_method node2vec --root_node_label 441840 --walks_per_node 4 --walk_length 24 \
+  --walk_window 5 --walk_epochs 5 --return_p 1 --inout_q 0.5 --threads 1 --experiment_id taxonomy
+```
+
+DeepWalk and node2vec use the optional Gensim dependency, a streamed seeded walk corpus and an epoch-wise linear learning-rate schedule. `--walk_negatives` applies to node2vec. `--threads 1` gives reproducible single-worker training in the pinned environment; additional workers permit asynchronous updates. The walk trainer checkpoints after the first and last epochs and at `--checkpoint_interval`. `--resume true` continues the saved optimizer state in Gensim, including its context weights and RNG. Other classical methods run once per fit and reuse verified complete exports on resume.
+
+A shuffled-assignment control preserves the set of trained vectors, geometry and named root while assigning nonroot codes to other rows. The command writes a new export and a reproducible destination-to-source row map. The `degree` option shuffles within exact parent counts and log-binned child counts using only training edges. Set `--matching none` for an unrestricted shuffle. The output reports the number of codes whose actual vector changed, including the effect of ties.
+
+```sh
+uv run --frozen python -m context.controls --source output/taxonomy/node2vec/euclidean/embedding.pt \
+  --destination output/taxonomy/shuffled-node2vec --matching degree --graph-file graph.pkl --seed 521
+```
+
+[Laplacian Eigenmaps](https://papers.nips.cc/paper_files/paper/2001/hash/f106b7f99d2cb30c3db1c3cc0fde9ccb-Abstract.html) · [Randomized SVD](https://arxiv.org/abs/0909.4061) · [FastRP](https://arxiv.org/abs/1908.11512) · [HOPE](https://www.kdd.org/kdd2016/papers/files/rfp0184-ouA.pdf) · [DeepWalk](https://arxiv.org/abs/1403.6652) · [node2vec](https://arxiv.org/abs/1607.00653).
+
 ## Graph inputs
 
 - **SNOMED Is a.** Supply the tab-delimited OMOP `CONCEPT` and `CONCEPT_RELATIONSHIP` files and a CSV with one `conceptId` column. Active, standard SNOMED endpoints and active child-to-parent `Is a` rows define the taxonomy. The graph stores parent-to-child edges and retains intermediate nodes and multiple paths from covered seeds to the chosen root. In the saved graph, `Graph.load(path).extraction` records coverage and exclusions. The default root is OMOP concept 441840, Clinical finding.

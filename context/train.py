@@ -10,6 +10,7 @@ import torch
 from filelock import FileLock
 
 from context.args import Args
+from context.classical import METHODS, fit_classical, validate_settings
 from context.dataset import GraphEdges, GraphEmbeddingDataset
 from context.eval import evaluate_model
 from context.export import concept_labels, export_embedding, file_sha, load_model, save_checkpoint
@@ -24,8 +25,8 @@ from context.selection import split_edges
 
 def output_folder(args, geometry):
     folder = Path(args.output_directory) / args.experiment_id
-    if getattr(args, "training_method", "sampled") == "landmark":
-        folder /= "landmark"
+    if getattr(args, "training_method", "sampled") != "sampled":
+        folder /= args.training_method
     if geometry == "euclidean":
         folder = folder / "euclidean"
         if getattr(args, "euclidean_root", "fixed") == "trainable":
@@ -60,8 +61,10 @@ def _validate(args):
             raise ValueError("Landmark shortest paths and spectral fitting run on CPU. Use --device cpu.")
     elif args.training_method == "sampled":
         _validate_sampled(args)
+    elif args.training_method in METHODS:
+        validate_settings(args)
     else:
-        raise ValueError("Expected sampled or landmark training")
+        raise ValueError(f"Unknown training_method {args.training_method!r}")
     if args.eval_interval < 0:
         raise ValueError("Invalid evaluation interval")
     if not 0 <= args.validation_fraction < .5 or (args.validation_fraction and not args.eval_interval):
@@ -172,7 +175,7 @@ def _train_geometries(args, fixed_rates, selection_identity):
         if selection_identity and selection_identity.get("graph_sha256", graph_digest) != graph_digest:
             raise ValueError("Refit requires the graph used for selection")
         subgraph = graph.full_graph if args.graph_id == "full" else graph.subgraph[args.graph_id]
-        if args.training_method == "landmark":
+        if args.training_method != "sampled":
             dataset = GraphEdges(subgraph, directed=args.directed)
         else:
             dataset = GraphEmbeddingDataset(subgraph, directed=args.directed, num_negative_samples=args.negative_samples)
@@ -208,23 +211,27 @@ def _train_geometries(args, fixed_rates, selection_identity):
                         shutil.rmtree(stage)
                     records.extend(cached)
                     continue
-                if stage is None and ((destination / "training.json").exists() or any(destination.glob(".context-fit-*/progress.pt"))):
+                if stage is None and ((destination / "training.json").exists() or any(destination.glob(".context-fit-*/progress.pt")) or any(destination.glob(".context-fit-*/walk.model"))):
                     raise ValueError("No saved run matches the graph, settings and implementation")
             if stage is None:
                 stage = new_stage(destination, identity)
             try:
-                if settings.training_method == "landmark":
-                    from context.landmarks import landmark_distances
-                    if basis is None:
-                        budget = settings.landmarks or max(64, 2 * settings.embedding_dim + 1)
-                        basis = landmark_distances(dataset, root, budget, settings.seed)
-                    fitted = _fit_landmarks(settings, dataset, basis, root, labels, stage, graph_digest, partition, selection_identity)
-                else:
+                if settings.training_method == "sampled":
                     fitted = _fit(settings, dataset, root, labels, stage, graph_digest, partition, fixed_rates, selection_identity)
+                else:
+                    if settings.training_method == "landmark":
+                        from context.landmarks import fit_coordinates, landmark_distances
+                        if basis is None:
+                            budget = settings.landmarks or max(64, 2 * settings.embedding_dim + 1)
+                            basis = landmark_distances(dataset, root, budget, settings.seed)
+                        model, details = fit_coordinates(basis, settings, root)
+                    else:
+                        model, details = fit_classical(dataset, settings, root, stage)
+                    fitted = _export_representation(settings, dataset, model, details, root, labels, stage, graph_digest, partition, selection_identity)
                 records.extend(fitted)
                 _publish(stage, destination, settings.model_file)
             except BaseException:
-                if (stage / "training.json").exists() or (stage / "progress.pt").exists() or any((stage / "models").glob("*.pt")):
+                if (stage / "training.json").exists() or (stage / "progress.pt").exists() or (stage / "walk.model").exists() or any((stage / "models").glob("*.pt")):
                     print(f"Partial checkpoints retained in {stage}", flush=True)
                 else:
                     shutil.rmtree(stage)
@@ -233,11 +240,9 @@ def _train_geometries(args, fixed_rates, selection_identity):
         return records
 
 
-def _fit_landmarks(args, dataset, basis, root, labels, stage, graph_digest, partition, selection_identity):
-    from context.landmarks import fit_coordinates
-    model, details = fit_coordinates(basis, args, root)
+def _export_representation(args, dataset, model, details, root, labels, stage, graph_digest, partition, selection_identity):
     scope = "held_out_edge_selection" if partition else ("full_graph_refit" if selection_identity else "full_graph_reconstruction")
-    provenance = {"training_method": "landmark", "graph_sha256": graph_digest, "training_scope": scope,
+    provenance = {"training_method": args.training_method, "graph_sha256": graph_digest, "training_scope": scope,
                   "selection_identity": selection_identity, "seed": args.seed, **details}
     records, counts = [], {}
     if partition:

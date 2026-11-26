@@ -59,6 +59,21 @@ class Args:
     write_tsv: bool = field(default=True, metadata={"help": "Write projector TSV files alongside the ID-keyed tensor export."})
     threads: int | None = field(default=None, metadata={"help": "CPU threads used by PyTorch during fitting."})
     keep_eval_models: bool = field(default=True, metadata={"help": "Retain checkpoints from every scored epoch in addition to the selected model."})
-    training_method: Literal["sampled", "landmark"] = field(default="sampled", metadata={"help": "Sampled neighbor ranking or distance-based landmark fitting."})
+    training_method: Literal["sampled", "landmark", "random", "adjacency_svd", "laplacian", "fastrp", "ancestor", "hope", "deepwalk", "node2vec"] = "sampled"
     landmarks: int | None = field(default=None, metadata={"help": "Graph landmark budget. Default is max(64, 2 × embedding dimension + 1), capped at the number of concepts."})
     landmark_edge_length: float | None = field(default=None, metadata={"help": "Target distance per training-graph hop. By default use one for Euclidean and an automatically bounded length for hyperbolic space."})
+    diffusion_steps: int = 3
+    degree_exponent: float = -0.5
+    ancestor_decay: float = 0.5
+    ancestor_mix: float = 0.5
+    katz_beta: float = 0.1
+    svd_iterations: int = 3
+    spectral_tolerance: float = 1e-5
+    spectral_iterations: int = 300
+    walks_per_node: int = 4
+    walk_length: int = 24
+    walk_window: int = 5
+    walk_epochs: int = 5
+    walk_negatives: int = 5
+    return_p: float = 1.0
+    inout_q: float = 0.5

@@ -13,9 +13,9 @@ def refit(args, learning_rates, selection_identity):
     if settings.geometry == "both":
         raise ValueError("Choose the selected geometry for the full-graph refit")
     rates = [float(rate) for rate in learning_rates]
-    if settings.training_method == "landmark":
+    if settings.training_method != "sampled":
         if rates:
-            raise ValueError("Landmark refits require an empty learning-rate trace")
+            raise ValueError(f"{settings.training_method} refits require an empty sampled learning-rate trace")
     else:
         if not rates or not all(math.isfinite(rate) and rate > 0 for rate in rates):
             raise ValueError("Refit requires a fixed positive learning-rate trace")
