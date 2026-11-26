@@ -333,3 +333,16 @@ def test_graph_split_is_independent_of_geometry_and_negative_masks_use_only_trai
     for (source,), row in zip(sources.tolist(), candidates.tolist()):
         assert (source, row[0]) in seen
         assert set(row[1:]) == set(range(ds.num_nodes)) - {source} - {v for s, v in seen if s == source}
+
+
+def test_rank_counts_for_high_degree_tied_targets_across_candidate_blocks():
+    points = (np.arange(121) % 83).astype(np.float64)[:, None]
+    edges = [(0, target) for target in range(1, 89)]
+    result = rank_neighbors(points, edge_index(edges, len(points)), [0], candidate_block=11)
+    row = np.abs(points[:, 0] - points[0, 0])
+    positives = np.arange(1, 89)
+    negatives = row[89:]
+    ranks = [1 + (negatives < row[p]).sum() + .5 * (negatives == row[p]).sum() for p in positives]
+    ap = [(row[positives] <= row[p]).sum() / (row[1:] <= row[p]).sum() for p in positives]
+    assert result["mean_rank"] == pytest.approx(np.mean(ranks))
+    assert result["macro_average_precision"] == pytest.approx(np.mean(ap))

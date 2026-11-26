@@ -29,6 +29,10 @@ def _neighbors(adjacency, source):
 def _score_counts(scores, thresholds):
     if len(thresholds) == 1:
         return np.count_nonzero(scores < thresholds[0]), np.count_nonzero(scores <= thresholds[0])
+    if len(thresholds) <= 12:
+        less = np.fromiter((np.count_nonzero(scores < value) for value in thresholds), dtype=np.int64)
+        through = np.fromiter((np.count_nonzero(scores <= value) for value in thresholds), dtype=np.int64)
+        return less, through
     insertion_left = np.searchsorted(thresholds, scores, side="left")
     insertion_right = np.searchsorted(thresholds, scores, side="right")
     less = np.cumsum(np.bincount(insertion_right, minlength=len(thresholds) + 1))[:-1]
@@ -61,8 +65,8 @@ def rank_neighbors(points, targets, queries, curvature=None, known=None, batch_s
             relevant = _neighbors(targets, source)
             if not len(relevant) or np.any(relevant == source):
                 raise ValueError("Each query requires non-self positive targets")
-            excluded = _neighbors(known, source) if known is not None else []
-            excluded = np.union1d(np.setdiff1d(excluded, relevant, assume_unique=True), [source]).astype(np.int64)
+            excluded = np.array([source]) if known is None else np.union1d(
+                np.setdiff1d(_neighbors(known, source), relevant, assume_unique=True), [source])
             scores = cdist(points[source:source + 1], points[relevant], metric="sqeuclidean")[0]
             if margin is not None:
                 scores /= margin[relevant]
