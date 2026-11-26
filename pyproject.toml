@@ -1,17 +1,18 @@
 [project]
 name = "context"
 version = "2025.02.13a1"
-description = "A python library to embed knowledge graphs for context-aware prediction modeling."
+description = "Euclidean and Poincaré embeddings for clinical taxonomies from OMOP vocabularies."
 readme = "README.md"
-license = { file = "LICENSE" } 
+license = { file = "LICENSE" }
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "connectorx>=0.4.1",
     "duckdb>=1.2.0",
+    "filelock>=3.16.1",
     "hypll>=0.1.1",
     "igraph>=0.11.8",
     "matplotlib>=3.10.0",
     "networkx>=3.4.2",
+    "numpy>=2.2",
     "polars>=1.17.1",
     "pyarrow>=19.0.0",
     "rustworkx>=0.15.1",
@@ -21,7 +22,23 @@ dependencies = [
     "tqdm>=4.67.1",
 ]
 
+[project.optional-dependencies]
+walks = ["gensim==4.4.0"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3.4",
 ]
+
+[build-system]
+requires = ["setuptools==75.8.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["context"]
+
+[tool.setuptools.package-data]
+context = ["taxonomy-panel.json"]
+
+[tool.setuptools.data-files]
+"share/ohdsi-context/R" = ["R/extractPlpConcepts.R"]

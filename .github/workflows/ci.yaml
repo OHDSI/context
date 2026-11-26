@@ -26,7 +26,12 @@ jobs:
         run: uv python install
 
       - name: Install the project
-        run: uv sync --all-extras --dev
+        run: uv sync --frozen --all-extras --dev
 
       - name: Run tests
-        run: uv run pytest tests
+        run: uv run --frozen --all-extras python -m pytest tests
+
+      - uses: r-lib/actions/setup-r@v2
+
+      - name: Check PLP concept extraction
+        run: Rscript --vanilla tests/test_plp_concepts.R

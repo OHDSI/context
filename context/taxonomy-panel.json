@@ -1,0 +1,24 @@
+{
+  "schema": "context-representation-panel/1",
+  "shared": {
+    "graph_id": "ancestral", "root_node_label": 441840, "directed": true,
+    "embedding_dim": 16, "seed": 41, "split_seed": 101, "query_seed": 103,
+    "retrieval_direction": "parents", "validation_fraction": 0.075, "split_policy": "preserve_degrees",
+    "eval_interval": 10, "eval_queries": 256, "write_tsv": false, "threads": 1, "device": "cpu"
+  },
+  "arms": [
+    {"name": "sampled", "settings": {"training_method": "sampled", "geometry": "both", "optimizer": "adam", "learning_rate": 0.01, "epochs": 150, "burn_in": false, "negative_samples": 32, "save_top": 1, "keep_eval_models": false}},
+    {"name": "landmarks", "settings": {"training_method": "landmark", "geometry": "both", "landmarks": 64}},
+    {"name": "random-id", "settings": {"training_method": "random", "geometry": "euclidean"}},
+    {"name": "adjacency-svd", "settings": {"training_method": "adjacency_svd", "geometry": "euclidean"}},
+    {"name": "laplacian", "settings": {"training_method": "laplacian", "geometry": "euclidean"}},
+    {"name": "fast-rp", "settings": {"training_method": "fastrp", "geometry": "euclidean", "diffusion_steps": 3, "degree_exponent": -0.5}},
+    {"name": "ancestor-mix", "settings": {"training_method": "ancestor", "geometry": "euclidean", "diffusion_steps": 3, "ancestor_mix": 0.5, "ancestor_decay": 0.5}},
+    {"name": "hope-katz", "settings": {"training_method": "hope", "geometry": "euclidean", "katz_beta": 0.1}},
+    {"name": "topological-order", "settings": {"training_method": "order", "geometry": "euclidean"}},
+    {"name": "graph-autoencoder", "settings": {"training_method": "graph_autoencoder", "geometry": "euclidean", "gae_hidden": 32, "gae_epochs": 50, "gae_edge_budget": 32768, "gae_lr": 0.01}},
+    {"name": "deepwalk", "settings": {"training_method": "deepwalk", "geometry": "euclidean", "walks_per_node": 4, "walk_length": 24, "walk_window": 5, "walk_epochs": 5}},
+    {"name": "node2vec", "settings": {"training_method": "node2vec", "geometry": "euclidean", "walks_per_node": 4, "walk_length": 24, "walk_window": 5, "walk_epochs": 5, "walk_negatives": 5, "return_p": 1.0, "inout_q": 0.5}}
+  ],
+  "permutations": [{"arm": "landmarks", "matching": "none", "seed": 521}, {"arm": "landmarks", "matching": "degree", "seed": 521}]
+}
