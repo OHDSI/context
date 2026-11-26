@@ -1,6 +1,8 @@
 # OHDSI/context
 
-Train concept embeddings from a clinical taxonomy in Euclidean space or a Poincaré ball. The default trainer learns to rank observed neighbors against sampled alternatives. A second trainer fits shortest-path distances to landmarks. Both support the same graph, concept IDs and geometry-aware exports. Additional Euclidean methods encode adjacency, walks, ancestry, node order and graph convolution. The default geometry is hyperbolic.
+Train concept embeddings from a clinical taxonomy in Euclidean space or a Poincaré ball. Select one of twelve methods with `--training_method`. Sampled neighbor ranking and landmark fitting each support both geometries, giving fourteen method and geometry combinations in total. The default is sampled neighbor ranking in the Poincaré ball.
+
+For ten methods, `context` implements the algorithm using NumPy, SciPy, rustworkx or PyTorch, with HyPLL for sampled Poincaré training. For DeepWalk and node2vec, `context` generates the graph walks and Gensim’s `Word2Vec` trains the embeddings. Install the optional `walks` extra with `uv sync --frozen --extra walks` to enable these two methods.
 
 ## Train both geometries on one graph
 
