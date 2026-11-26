@@ -1,6 +1,6 @@
 [project]
 name = "context"
-version = "1.0.0"
+version = "2025.02.13a1"
 description = "Euclidean and Poincaré embeddings for clinical taxonomies from OMOP vocabularies."
 readme = "README.md"
 license = { file = "LICENSE" }

@@ -12,7 +12,7 @@ wheels = [
 
 [[package]]
 name = "context"
-version = "1.0.0"
+version = "2025.2.13a1"
 source = { editable = "." }
 dependencies = [
     { name = "duckdb" },

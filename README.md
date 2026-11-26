@@ -4,11 +4,9 @@ Train concept embeddings from a clinical taxonomy in Euclidean space or a Poinca
 
 For ten methods, `context` implements the algorithm using NumPy, SciPy, rustworkx or PyTorch, with HyPLL for sampled Poincaré training. For DeepWalk and node2vec, `context` generates the graph walks and Gensim’s `Word2Vec` trains the embeddings. Install the optional `walks` extra with `uv sync --frozen --extra walks` to enable these two methods.
 
-## Prepare a taxonomy analysis with version 1.0
+## Compare embedding methods on the same taxonomy
 
-Use Python 3.12 and the locked environment from this checkout. To replace a date-versioned installation, sync this checkout or install the 1.0.0 wheel explicitly. Python's version ordering places the earlier date-based versions above 1.0.0.
-
-The bundled template runs twelve methods on the same graph and adds four shuffled controls. Export it to review the dimensions, training budgets and graph holdout before starting.
+The bundled template runs twelve methods on the same graph and adds four shuffled controls. Use Python 3.12 and the locked environment from this checkout. Export the template to review the dimensions, training budgets and graph holdout before starting.
 
 ```sh
 uv sync --frozen --extra walks
