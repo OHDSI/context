@@ -1,4 +1,3 @@
-"""Portable, row-aligned embeddings and model checkpoints."""
 from numbers import Integral
 from pathlib import Path
 
@@ -16,8 +15,6 @@ def metadata(model):
 
 
 def save_checkpoint(path, model, args, epoch, losses):
-    # hypll state_dict can contain a ManifoldTensor. Store ordinary CPU tensors so
-    # both checkpoints load with weights_only=True and without a device dependency.
     state = {k: getattr(v, "tensor", v).detach().cpu() for k, v in model.state_dict().items()}
     torch.save({"state_dict": state, "args": {k: str(v) if isinstance(v, Path) else v
                                                for k, v in vars(args).items()},
@@ -26,7 +23,6 @@ def save_checkpoint(path, model, args, epoch, losses):
 
 
 def load_model(path, device="cpu"):
-    """Reconstruct a model saved by this version, using its recorded metric."""
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     weight = checkpoint["state_dict"]["weight"]
     with torch.random.fork_rng(devices=[]):

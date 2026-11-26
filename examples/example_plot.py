@@ -1,4 +1,3 @@
-"""Plot the original mean-rank and loss panels separately for each geometry."""
 import argparse
 
 import matplotlib.pyplot as plt
@@ -34,7 +33,7 @@ def plot_geometry(data, geometry):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description="Plot mean rank and loss for each embedding geometry.")
     parser.add_argument("metrics", help="eval_metrics.csv or eval_metrics_main.csv")
     args = parser.parse_args()
     data = pl.read_csv(args.metrics)

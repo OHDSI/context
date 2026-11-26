@@ -1,4 +1,3 @@
-"""Extract a single rooted SNOMED is-a taxonomy from OMOP vocabulary exports."""
 from collections import defaultdict
 from pathlib import Path
 
@@ -29,11 +28,7 @@ def _concept_id(value):
 
 
 def rooted_snomed_edges(concept_file, relationship_file, concept_ids, root=441840):
-    """Return parent-child edges, retained identifiers and aggregate coverage.
-
-    Is a in OMOP CONCEPT_RELATIONSHIP points from child to parent. Retain every
-    requested-to-root path. A closure table alone cannot establish edge type.
-    """
+    """Return parent-to-child edges, retained concept IDs and coverage for the rooted taxonomy."""
     root = _concept_id(root)
     requested = {i for i in map(_concept_id, concept_ids) if i > 0}
     active = pl.col("invalid_reason").fill_null("") == ""
@@ -58,7 +53,6 @@ def rooted_snomed_edges(concept_file, relationship_file, concept_ids, root=44184
     upward = _reach(accepted, parents)
     nodes = below & upward
     edges = sorted((par, ch) for ch in nodes for par in parents.get(ch, ()) if par in nodes)
-    # Kahn traversal checks the induced taxonomy, including self-loops.
     degree = {ch: len(parents.get(ch, set()) & nodes) for ch in nodes}
     pending = [node for node, count in degree.items() if count == 0]
     if set(pending) != {root}:

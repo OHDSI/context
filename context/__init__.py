@@ -1,1 +1,0 @@
-"""OHDSI concept graph embeddings."""

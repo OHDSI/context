@@ -3,15 +3,12 @@ from torch.nn import functional as F
 
 
 def candidate_loss(distances: torch.Tensor) -> torch.Tensor:
-    """Negative log probability of the observed neighbor in each candidate row."""
     if distances.ndim != 2 or not len(distances) or distances.shape[1] < 2:
         raise ValueError("Expected [positive edges, 1 + negative samples] distances")
-    # Subtract the positive before reducing, so very large equal distances retain log(K).
     return torch.logsumexp(distances[:, :1] - distances, dim=-1).mean()
 
 
 def poincare_embeddings_loss(distances: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    """Compatibility interface for rows containing one or more labeled positives."""
     if targets.shape != distances.shape:
         raise ValueError("Targets and distances must have matching shapes")
     targets = targets.bool()

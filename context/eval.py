@@ -1,4 +1,3 @@
-"""Exact, batched graph reconstruction in the fitted geometry."""
 import math
 
 import numpy as np
@@ -18,14 +17,13 @@ def _check_points(points, curvature):
 
 
 def hyperbolic_distance(u, v, c=1.0, eps=1e-5):
-    """Pairwise geodesics for curvature -c. The legacy eps argument is optional."""
+    """Return pairwise Poincaré distances for sectional curvature -c."""
     _check_points(u, c)
     _check_points(v, c)
     return pairwise_distance(u, v, c)
 
 
 def fast_average_precision(y_true, y_score):
-    """Average precision at distinct score thresholds, including ties."""
     scores, order = y_score.sort(descending=True)
     labels = y_true[order].bool()
     if not labels.any():
@@ -63,7 +61,6 @@ def evaluate_mean_rank_and_map(dataset, embeddings, num_nodes, batch_size=128, d
             through = ordered.searchsorted(relevant, "right")
             positives_through = relevant.searchsorted(relevant, "right")
             right = through - positives_through
-            # Other true neighbors are filtered from rank. Equal negatives count one half.
             rank_sum += (1 + (left + right) / 2).sum()
             ap_sum += (positives_through / through).mean()
             positive_count += len(neighbors)

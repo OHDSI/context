@@ -27,7 +27,7 @@ The dimension and learning rate illustrate the interface. Select them for the in
 
 ### Euclidean root placement
 
-The graph root selects which SNOMED descendants belong in the taxonomy. Use `--euclidean_root trainable` to fit its Euclidean vector along with the other concept vectors. Both policies start the root at zero. The Poincaré fit in `--geometry both` keeps its named root anchored. Trainable-root Euclidean outputs go in `euclidean/trainable-root/`, so both Euclidean fits can share an experiment and graph.
+The graph root selects which SNOMED descendants belong in the taxonomy. Use `--euclidean_root trainable` to fit its Euclidean vector along with the other concept vectors. Both policies start the root at zero. On PyTorch 2.5.1 the Apple MPS backend needs an explicit gradient mask to keep a fixed root there. The Poincaré fit in `--geometry both` keeps its named root anchored. Trainable-root Euclidean outputs go in `euclidean/trainable-root/`, so both Euclidean fits can share an experiment and graph.
 
 For a Euclidean artifact with a named root, `vectors - vectors[artifact["graph_root_index"]]` places it at the origin after training and preserves all L2 distances up to rounding. `graph_root_index` identifies the named node. The existing `root_index` field identifies a frozen row and is null for a trainable root. Apply a chosen coordinate convention consistently when training and using a downstream model that consumes raw vectors. Parent–child direction is available from the graph.
 

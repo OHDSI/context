@@ -1,4 +1,3 @@
-"""Train either geometry on a shared concept graph and sampled-neighbor objective."""
 import hashlib
 import json
 import math
@@ -65,8 +64,6 @@ def _validate(args):
 
 
 def _args_with_defaults(args):
-    # Older callers pass a Namespace, sometimes with graph_id and concept_map as
-    # class attributes. Read attributes to preserve these configurations.
     values = {name: getattr(args, name, default) for name, default in vars(Args()).items()}
     return Args(**{k: str(v) if isinstance(v, Path) else v for k, v in values.items()})
 
@@ -127,7 +124,6 @@ def train(args):
 
 
 def _fit(args, dataset, root, labels, stage, graph_digest):
-    # Independent RNG streams keep paired runs on identical positives and negatives.
     order = torch.Generator().manual_seed(args.seed)
     negatives = np.random.default_rng(args.seed)
     anchor = None if args.geometry == "euclidean" and args.euclidean_root == "trainable" else root
@@ -135,7 +131,6 @@ def _fit(args, dataset, root, labels, stage, graph_digest):
         torch.random.default_generator.manual_seed(args.seed)
         model = create_embedding(dataset.num_nodes, args.embedding_dim, args.geometry, args.curvature, anchor)
         if root is not None and anchor is None:
-            # Match the fixed fit at initialization, then update every row normally.
             with torch.no_grad():
                 model.coordinates()[root].zero_()
     model = model.to(args.device)
@@ -205,7 +200,6 @@ def _checkpoint_path(folder, args, epoch, loss):
 
 
 def save_model(model, args, experiment_folder, epoch, average_loss, loss_per_epoch, *, kept=None):
-    """Keep the best training checkpoints. The trainer reuses its in-memory ranking."""
     folder = Path(experiment_folder) / "models"
     if args.save_top < 1:
         raise ValueError("save_top must be positive")
@@ -234,8 +228,6 @@ def save_single_model(model, args, experiment_folder, epoch, average_loss, loss_
 
 
 def _publish(stage, destination, model_file):
-    # Compute the whole fit in staging. A failed fit leaves the last completed
-    # export in place. Publish the self-contained embedding last, atomically.
     for name in ("models", "eval_models"):
         target = destination / name
         target.mkdir(exist_ok=True)

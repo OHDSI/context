@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 
@@ -18,8 +18,9 @@ class Args:
     burn_in_epochs: int = 20
     batch_size: int = 4096
     embedding_dim: int = 3
-    # Magnitude of the negative sectional curvature for the Poincaré model.
-    curvature: float = 1.0
+    curvature: float = field(
+        default=1.0, metadata={"help": "Magnitude of the negative sectional curvature for the Poincaré model."}
+    )
     compile: bool = False
     device: str = "cpu"
     negative_samples: int = 50
@@ -28,13 +29,13 @@ class Args:
     lr_reduce_patience: int = 50
     lr_reduce_factor: float = 0.1
     eval_interval: int = 500
-    # Additional fields follow the original constructor's positional arguments.
-    graph_id: str = "ancestral"
+    graph_id: str = field(default="ancestral", metadata={"help": "Subgraph name, or 'full' for the entire graph."})
     root_node_label: int | None = 441840
     graph_file: str | None = None
     concept_map: str | None = None
     relationship_file_path: str | None = None
     geometry: Literal["hyperbolic", "euclidean", "both"] = "hyperbolic"
     seed: int = 1
-    # Controls the Euclidean optimizer; root_node_label selects the taxonomy root.
-    euclidean_root: Literal["fixed", "trainable"] = "fixed"
+    euclidean_root: Literal["fixed", "trainable"] = field(
+        default="fixed", metadata={"help": "Training policy for the Euclidean root selected by --root_node_label."}
+    )

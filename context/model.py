@@ -1,4 +1,3 @@
-"""Embeddings and distances for a Euclidean space or a Poincaré ball."""
 import math
 
 import torch
@@ -9,7 +8,6 @@ from torch.nn import functional as F
 
 
 def _ball_distance(chord, left_margin, right_margin, curvature):
-    # asinh is well conditioned for coincident points and near the ball boundary.
     sqrt_c = curvature ** 0.5
     return (2 / sqrt_c) * torch.asinh(sqrt_c * chord / (left_margin.sqrt() * right_margin.sqrt()))
 
@@ -19,7 +17,6 @@ def _margin(points, curvature):
 
 
 def pairwise_distance(left, right, curvature=None):
-    """All query-to-candidate distances. None selects ordinary Euclidean space."""
     chord = torch.cdist(left, right, compute_mode="donot_use_mm_for_euclid_dist")
     if curvature is None:
         return chord
@@ -29,7 +26,6 @@ def pairwise_distance(left, right, curvature=None):
 
 class _EdgeDistances:
     def forward(self, edges: torch.Tensor, targets=None) -> torch.Tensor:
-        """Score edge pairs or broadcast one source per row over many targets."""
         if targets is None:
             sources, targets = edges.unbind(dim=-1)
         else:
@@ -45,8 +41,6 @@ class _EdgeDistances:
     def _lookup(self, indices):
         points = F.embedding(indices, self.coordinates(), padding_idx=self.root_concept_index)
         if points.device.type == "mps" and self.root_concept_index is not None:
-            # torch 2.5 MPS embedding backward ignores padding_idx. Mask before
-            # differentiation so both coordinates and optimizer moments stay zero.
             points = points.masked_fill((indices == self.root_concept_index).unsqueeze(-1), 0.0)
         return points
 
@@ -109,6 +103,5 @@ def create_embedding(num_embeddings, embedding_dim, geometry="hyperbolic", curva
     curvature = torch.tensor(float(curvature), dtype=torch.float32).item()
     if not math.isfinite(curvature) or curvature <= 0:
         raise ValueError("Poincaré curvature magnitude must be finite and positive")
-    # The CLI specifies the effective magnitude c, while hypll normally applies softplus.
     manifold = PoincareBall(c=Curvature(curvature, constraining_strategy=torch.nn.Identity()))
     return PoincareEmbedding(num_embeddings, embedding_dim, manifold, root_concept_index)

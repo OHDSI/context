@@ -123,7 +123,6 @@ class Graph:
         return None
 
     def ancestral_subgraph(self, nodes, name="ancestral"):
-        # One reverse traversal from all requested seeds preserves every parent.
         lookup = {self.full_graph[i]: i for i in self.full_graph.node_indexes()}
         selected = {lookup[n] for n in nodes if n in lookup}
         frontier = list(selected)
@@ -139,8 +138,6 @@ class Graph:
 
     @classmethod
     def from_omop(cls, ancestor_file, concept_ids, name="ancestral"):
-        """Build the ancestral subgraph from one-step entries in CONCEPT_ANCESTOR."""
-        # A direct parent can also have a longer alternative path in a DAG.
         edges = (pl.scan_csv(ancestor_file, separator="\t", quote_char=None)
                  .filter((pl.col("min_levels_of_separation") == 1) &
                          (pl.col("ancestor_concept_id") != pl.col("descendant_concept_id")))
@@ -152,7 +149,6 @@ class Graph:
 
     @classmethod
     def from_snomed_taxonomy(cls, concept_file, relationship_file, concept_ids, root=441840, name="ancestral"):
-        """Build a rooted directed acyclic graph of explicit SNOMED is-a statements."""
         edges, nodes, summary = rooted_snomed_edges(concept_file, relationship_file, concept_ids, root)
         table = pl.DataFrame(edges, schema={"parent": pl.Int64, "child": pl.Int64}, orient="row")
         graph = cls(table.with_columns(pl.lit("subsumes").alias("relation")))
@@ -164,7 +160,6 @@ class Graph:
 
     @staticmethod
     def get_concept_set(data_object_dirs, output_folder=None, allow_partial=False, root_concept_id=441840):
-        """Read mapped concepts from every supplied PLP object, failing on incomplete input by default."""
         all_concept_ids = set()
         if not data_object_dirs:
             raise ValueError("Supply at least one PLP data object")
@@ -201,7 +196,6 @@ class Graph:
         return all_concept_ids
 
     def ancestral_subgraph_from_plp_data(self, data_object_dirs, name="ancestral"):
-        """Use mapped PLP concepts and all their ancestors."""
         return self.ancestral_subgraph(self.get_concept_set(data_object_dirs), name=name)
 
     @staticmethod
@@ -224,7 +218,6 @@ class Graph:
                 conn = duckdb.connect(str(target), read_only=True)
             try:
                 query = 'SELECT DISTINCT conceptId AS "conceptId" FROM covariateRef'
-                # Materialize before the connection and temporary directory go away.
                 if target.suffix == ".duckdb":
                     return conn.sql(query).pl().lazy()
                 return pl.read_database(query, conn).lazy()

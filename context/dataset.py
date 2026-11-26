@@ -31,8 +31,6 @@ class GraphEmbeddingDataset(Dataset):
         self.num_edges = len(edges)
         positives = edges if directed else np.unique(np.concatenate((edges, edges[:, ::-1])), axis=0)
 
-        # For a source with sorted blocked targets b[j], the r-th allowed node
-        # is r + count(b[j] - j <= r). Index the shifted lists once for all rows.
         nodes = np.arange(self.num_nodes, dtype=np.int64)
         blocked = np.sort(np.r_[positives[:, 0] * self.num_nodes + positives[:, 1],
                                 nodes * self.num_nodes + nodes])
@@ -76,7 +74,6 @@ class GraphEmbeddingDataset(Dataset):
         return adjacency
 
     def sample_negative_uniform(self, batch_size):
-        """Unconditional draws, retained for callers of the original helper."""
         return torch.randint(self.num_nodes, (batch_size * self.num_negative_samples,), device=self.device)
 
     def _sample(self, positives, rng):
@@ -92,14 +89,13 @@ class GraphEmbeddingDataset(Dataset):
         return ranks + ends - self._offsets[sources]
 
     def candidate_nodes(self, indices, rng=None):
-        """Draw K conditional negatives per positive indexed in [0, training_size)."""
+        """Return source rows and target rows with the observed neighbor in column zero."""
         positives = self._positives[indices].reshape(-1, 2)
         negatives = self._sample(positives, rng)
         return (torch.as_tensor(positives[:, :1], dtype=torch.long, device=self.device),
                 torch.as_tensor(np.column_stack((positives[:, 1], negatives)), device=self.device))
 
     def __getitem__(self, idx):
-        # Preserve original edge indexing and the flat positives-first layout.
         if isinstance(idx, torch.Tensor):
             idx = idx.cpu().numpy()
         observed = self._observed[idx].reshape(-1, 2)

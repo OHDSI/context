@@ -1,4 +1,3 @@
-"""Parameter search over a single shared graph, optionally for both geometries."""
 import hashlib
 import json
 from dataclasses import replace
@@ -19,7 +18,6 @@ def cached_metrics(settings, graph_digest):
     if not summary.exists() or not (folder / "embedding.pt").exists():
         return None
     info = json.loads(summary.read_text())
-    # Runs saved before the Euclidean root option always fixed a named root.
     info["settings"].setdefault("euclidean_root", "fixed")
     if info["graph_sha256"] != graph_digest or info["settings"] != vars(settings):
         return None

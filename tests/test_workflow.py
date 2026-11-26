@@ -18,7 +18,6 @@ from context.train import train
 
 @pytest.fixture
 def settings(tmp_path):
-    # The root intentionally has a nonzero row. Node labels are not tensor indices.
     edges = [(33, 11), (90, 33), (90, 27), (27, 11), (27, 82), (33, 45)]
     graph = Graph(pl.DataFrame([(a, b, "Is a") for a, b in edges],
                                schema=["source", "target", "edge"], orient="row"))

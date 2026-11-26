@@ -1,4 +1,3 @@
-# Export concept identifiers from a plpData covariate dictionary for context.
 extractPlpConcepts <- function(plpData, analysisIds = NULL, rootConceptId = 441840) {
   ref <- plpData$covariateData$covariateRef
   if (is.null(ref) || !"conceptId" %in% colnames(ref)) stop("covariateRef requires conceptId")
