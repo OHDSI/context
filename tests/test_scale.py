@@ -346,3 +346,18 @@ def test_rank_counts_for_high_degree_tied_targets_across_candidate_blocks():
     ap = [(row[positives] <= row[p]).sum() / (row[1:] <= row[p]).sum() for p in positives]
     assert result["mean_rank"] == pytest.approx(np.mean(ranks))
     assert result["macro_average_precision"] == pytest.approx(np.mean(ap))
+
+
+def test_active_structural_nodes_can_link_standard_seeds_without_admitting_inactive_terms(tmp_path):
+    concepts = tmp_path / "concept.tsv"
+    relationships = tmp_path / "rel.tsv"
+    concepts.write_text("concept_id\tvocabulary_id\tstandard_concept\tinvalid_reason\n101\tSNOMED\tS\t\n"
+                        "102\tSNOMED\t\t\n103\tSNOMED\tS\t\n104\tSNOMED\t\tD\n105\tOTHER\tS\t\n")
+    relationships.write_text("concept_id_1\tconcept_id_2\trelationship_id\tinvalid_reason\n" +
+                             "".join(f"{child}\t{parent}\tIs a\t\n" for child, parent in
+                                     [(102, 101), (103, 102), (104, 101), (105, 101)]))
+    with pytest.raises(ValueError, match="None of the requested"):
+        Graph.from_snomed_taxonomy(concepts, relationships, [103], 101)
+    graph = Graph.from_snomed_taxonomy(concepts, relationships, [103], 101, snomed_concepts="active")
+    assert set(graph.full_graph.nodes()) == {101, 102, 103}
+    assert graph.extraction["covered"] == 1 and graph.extraction["snomed_concepts"] == "active"

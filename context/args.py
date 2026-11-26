@@ -40,7 +40,10 @@ class Args:
         default="fixed", metadata={"help": "Training policy for the Euclidean root selected by --root_node_label."}
     )
     taxonomy_scope: Literal["seeds", "subtree", "all"] = field(
-        default="seeds", metadata={"help": "Seed-to-root paths, all root descendants, or every active standard SNOMED node."}
+        default="seeds", metadata={"help": "Seed-to-root paths, all root descendants, or the entire eligible SNOMED graph."}
+    )
+    snomed_concepts: Literal["standard", "active"] = field(
+        default="standard", metadata={"help": "Use standard concepts or include all active SNOMED concepts, including structural nodes."}
     )
     eval_queries: int = field(default=256, metadata={"help": "Maximum fixed evaluation queries; zero ranks every eligible query."})
     query_seed: int = 2

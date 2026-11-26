@@ -39,7 +39,8 @@ def build_graph(args):
         if args.concept_map is None or (args.root_node_label is None and args.taxonomy_scope != "all"):
             raise ValueError("SNOMED Is a extraction requires a concept_map and root_node_label")
         return Graph.from_snomed_taxonomy(args.concept_map, args.relationship_file_path, ids,
-                                          args.root_node_label, args.graph_id, include_all=args.taxonomy_scope == "all")
+                                          args.root_node_label, args.graph_id, include_all=args.taxonomy_scope == "all",
+                                          snomed_concepts=args.snomed_concepts)
     return Graph.from_omop(args.hierarchy_file_path, ids, name=args.graph_id)
 
 
@@ -102,7 +103,7 @@ def _source_hashes(args):
     if args.taxonomy_scope == "seeds":
         files["seeds"] = args.concept_id_file
     return {"files": {key: file_sha(path) for key, path in files.items()}, "root": args.root_node_label,
-            "graph_id": args.graph_id, "taxonomy_scope": args.taxonomy_scope}
+            "graph_id": args.graph_id, "taxonomy_scope": args.taxonomy_scope, "snomed_concepts": args.snomed_concepts}
 
 
 def graph_for_run(args, path):

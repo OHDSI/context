@@ -17,7 +17,7 @@ from zipfile import ZipFile
 from context.taxonomy import snomed_taxonomy
 
 class Graph:
-    def __init__(self, hierarchy):
+    def __init__(self, hierarchy, *, nodes=()):
         """
         :param hierarchy: full hierarchy edge list (e.g. SNOMED's
         CONCEPT_ANCESTOR.csv)
@@ -41,6 +41,7 @@ class Graph:
                 target_index = existing_nodes[target]
             self.full_graph.add_edge(source_index, target_index, edge_data)
 
+        self.full_graph.add_nodes_from([node for node in nodes if node not in existing_nodes])
         delta = time.time() - start
         print(f"Processed edge list in {delta:.2f} seconds")
         print(repr(self))
@@ -170,14 +171,12 @@ class Graph:
 
     @classmethod
     def from_snomed_taxonomy(cls, concept_file, relationship_file, concept_ids=None, root=441840, name="ancestral", *,
-                             include_all=False):
+                             include_all=False, snomed_concepts="standard"):
         if include_all and concept_ids is not None:
             raise ValueError("Use concept seeds or request the entire SNOMED vocabulary")
-        table, nodes, summary = snomed_taxonomy(concept_file, relationship_file, concept_ids, root, include_all)
-        graph = cls(table.with_columns(pl.lit("subsumes").alias("relation")))
-        if summary["isolated_nodes"]:
-            existing = set(graph.full_graph.nodes())
-            graph.full_graph.add_nodes_from([int(node) for node in nodes if node not in existing])
+        table, nodes, summary = snomed_taxonomy(concept_file, relationship_file, concept_ids, root, include_all, snomed_concepts)
+        graph = cls(table.with_columns(pl.lit("subsumes").alias("relation")),
+                    nodes=nodes.tolist() if summary["isolated_nodes"] else ())
         graph.subgraph[name] = graph.full_graph.copy()
         graph.extraction = summary
         return graph
