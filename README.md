@@ -4,6 +4,24 @@ Train concept embeddings from a clinical taxonomy in Euclidean space or a Poinca
 
 For ten methods, `context` implements the algorithm using NumPy, SciPy, rustworkx or PyTorch, with HyPLL for sampled Poincaré training. For DeepWalk and node2vec, `context` generates the graph walks and Gensim’s `Word2Vec` trains the embeddings. Install the optional `walks` extra with `uv sync --frozen --extra walks` to enable these two methods.
 
+## Prepare a taxonomy analysis with version 1.0
+
+Use Python 3.12 and the locked environment from this checkout. To replace a date-versioned installation, sync this checkout or install the 1.0.0 wheel explicitly. Python's version ordering places the earlier date-based versions above 1.0.0.
+
+The bundled template runs twelve methods on the same graph and adds four shuffled controls. Export it to review the dimensions, training budgets and graph holdout before starting.
+
+```sh
+uv sync --frozen --extra walks
+uv run --frozen --extra walks python -m context.panel --dry-run > settings.json
+uv run --frozen --extra walks python -m context.panel --template settings.json \
+  --vocabulary /path/to/omop-vocabulary --concept-ids concept_ids.csv \
+  --snomed-concepts active --output output/taxonomy-panel
+```
+
+The seed file has one `conceptId` column. The command keeps intermediate concepts on every path from the selected codes to the root. To include the entire active SNOMED forest, replace `--concept-ids concept_ids.csv` with `--taxonomy-scope all` and retain `--snomed-concepts active`. To reuse a trusted graph, supply `--graph graph.pkl` in place of the vocabulary and extraction options.
+
+The output `panel.json` records the settings, graph and split hashes, and the path and checksum for each ID-keyed embedding. Repeating the command reuses verified fits and shuffles and continues eligible saved epochs. Use a new output directory for a changed graph, template or package version. The supplied degree-preserving holdout requires redundant parent links. For a tree, choose a random edge split or set `validation_fraction` to zero and `retrieval_direction` to `observed` for all-edge fitting.
+
 ## Train both geometries on one graph
 
 From a checkout with Python 3.12 and uv, run the following commands with your vocabulary and concept seed files.

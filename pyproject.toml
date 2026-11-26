@@ -1,7 +1,7 @@
 [project]
 name = "context"
-version = "2026.11.26a5"
-description = "A python library to embed knowledge graphs for context-aware prediction modeling."
+version = "1.0.0"
+description = "Euclidean and Poincaré embeddings for clinical taxonomies from OMOP vocabularies."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12,<3.13"
@@ -36,6 +36,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["context"]
+
+[tool.setuptools.package-data]
+context = ["taxonomy-panel.json"]
 
 [tool.setuptools.data-files]
 "share/ohdsi-context/R" = ["R/extractPlpConcepts.R"]
