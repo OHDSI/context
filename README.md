@@ -22,6 +22,8 @@ The seed file has one `conceptId` column. The command keeps intermediate concept
 
 The output `panel.json` records the settings, graph and split hashes, and the path and checksum for each ID-keyed embedding. Repeating the command reuses verified fits and shuffles and continues eligible saved epochs. Use a new output directory for a changed graph, template or package version. The supplied degree-preserving holdout requires redundant parent links. For a tree, choose a random edge split or set `validation_fraction` to zero and `retrieval_direction` to `observed` for all-edge fitting.
 
+For custom panels, every scored arm must use the same retrieval direction and query limit. Sampled queries also require the same `query_seed`. Set `eval_queries` to zero to score every eligible concept.
+
 ## Train both geometries on one graph
 
 From a checkout with Python 3.12 and uv, run the following commands with your vocabulary and concept seed files.

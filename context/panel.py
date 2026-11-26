@@ -28,6 +28,7 @@ def _read_template(template):
     used = {"panel.json", "panel.identity", "taxonomy.pkl"}
     options = {}
     comparison = None
+    retrieval = None
     for arm in spec["arms"]:
         name, settings = arm["name"], arm["settings"]
         if (not isinstance(name, str) or not name or name.startswith(".") or "/" in name or "\\" in name
@@ -43,6 +44,11 @@ def _read_template(template):
         if comparison is not None and graph_settings != comparison:
             raise ValueError("All panel arms must use the same graph, direction, root, width and partition settings")
         comparison = graph_settings
+        if args.eval_interval:
+            query_settings = (args.retrieval_direction, args.eval_queries, args.query_seed if args.eval_queries else None)
+            if retrieval is not None and query_settings != retrieval:
+                raise ValueError("Scored arms must share a retrieval direction, query limit and sampling seed")
+            retrieval = query_settings
         options[name] = args
     permutations = set()
     for control in spec.get("permutations", []):

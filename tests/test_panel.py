@@ -59,6 +59,28 @@ def test_incompatible_panel_is_rejected_before_training(template, change):
         panel.plan(template)
 
 
+@pytest.mark.parametrize("settings", [
+    {"retrieval_direction": "children"}, {"eval_queries": 1}, {"query_seed": 99},
+])
+def test_scored_arms_must_use_matched_retrieval_queries(template, settings):
+    spec = json.loads(template.read_text())
+    spec["shared"].update(validation_fraction=0.1, eval_interval=1)
+    spec["arms"][0]["settings"]["retrieval_direction"] = "parents"
+    spec["arms"][1]["settings"].update({"retrieval_direction": "parents", **settings})
+    template.write_text(json.dumps(spec))
+    with pytest.raises(ValueError, match="retrieval"):
+        panel.plan(template)
+
+
+@pytest.mark.parametrize("eval_interval, eval_queries", [(1, 0), (0, 2)])
+def test_unused_query_seed_can_differ(template, eval_interval, eval_queries):
+    spec = json.loads(template.read_text())
+    spec["shared"].update(eval_interval=eval_interval, eval_queries=eval_queries)
+    spec["arms"][1]["settings"]["query_seed"] = 99
+    template.write_text(json.dumps(spec))
+    assert panel.plan(template) == spec
+
+
 def test_raw_seed_paths_resume_and_shuffled_artifact_integrity(template, vocabulary, tmp_path, monkeypatch):
     seeds = tmp_path / "seeds.csv"
     seeds.write_text("conceptId\n4\n")
