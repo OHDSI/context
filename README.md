@@ -4,6 +4,8 @@ Train concept embeddings from a clinical taxonomy in Euclidean space or a Poinca
 
 For ten methods, `context` implements the algorithm using NumPy, SciPy, rustworkx or PyTorch, with HyPLL for sampled Poincaré training. For DeepWalk and node2vec, `context` generates the graph walks and Gensim’s `Word2Vec` trains the embeddings. Install the optional `walks` extra with `uv sync --frozen --extra walks` to enable these two methods.
 
+[Package workflow](#package-overview) · [Python class diagram](#core-python-classes)
+
 ## Compare embedding methods on the same taxonomy
 
 The bundled template runs twelve methods on the same graph and adds four shuffled controls. Use Python 3.12 and the locked environment from this checkout. Export the template to review the dimensions, training budgets and graph holdout before starting.
@@ -188,3 +190,55 @@ Rerun the same fitting command with `--resume true`. Keep the output directory i
 `context.export.load_embedding(path)` checks the sidecar SHA-256, row alignment, geometry and finite coordinates. The two top-level tensors use OHDSI DeepPatientLevelPrediction's mapped concept IDs and float32 vectors. Use `CustomEmbeddings` for native Euclidean coordinates and `PoincareEmbeddings` with the exported effective curvature for ball coordinates. Each binary covariate is matched by concept ID. The PLP dictionary and the model's covariate columns can have a different order. For older two-tensor exports without metadata supply `geometry=` and, for Poincaré, the known effective `curvature=` to the reader. The optional `--euclidean_distance_scale` reproduces objectives using a positive multiplier on L2 distance. Coordinates retain their native units.
 
 Old research runs and study-specific clinical estimators retain their pinned implementations for exact historical replay. The training loss, candidate grouping and validation choices in this branch are recorded with its new fits.
+
+## Package overview
+
+`python -m context` fits a selected method. `python -m context.panel` calls the same training code for each method on a shared graph and can add controls by shuffling the exported vectors across concept IDs. When edges are held out, fitting uses the training edges and `GraphPartition` supplies the validation and test queries. [Training](context/train.py) · [Panel](context/panel.py) · [Edge splits](context/selection.py)
+
+```mermaid
+flowchart TD
+    accTitle: From a clinical taxonomy to concept embeddings
+    accDescr: An OMOP vocabulary or a saved graph supplies the concept IDs and edges. Sampled and landmark methods support Euclidean and Poincaré coordinates. The other methods produce Euclidean coordinates. All methods export one vector per retained concept ID.
+    source["OMOP vocabulary or saved graph"] --> edges["Concept IDs and training edges"]
+    edges --> both["Sampled or landmark fit<br/>Euclidean or Poincaré"]
+    edges --> euclidean["Ancestor, walk and other fits<br/>Euclidean"]
+    both --> output["embedding.pt<br/>Concept IDs and coordinates"]
+    euclidean --> output
+```
+
+### Core Python classes
+
+`Graph` stores the taxonomy as rustworkx `PyDiGraph` objects. `GraphEdges` maps the selected graph's concepts to embedding rows. Its subclass `GraphEmbeddingDataset` adds negative sampling for the sampled method. Both embedding classes share distance evaluation through `_EdgeDistances` and expose `coordinates()` to the exporter. [Graph storage](context/graph.py) · [Edge datasets](context/dataset.py) · [Embedding models](context/model.py) · [Export](context/export.py)
+
+```mermaid
+classDiagram
+    direction LR
+    accTitle: Graph storage, edge datasets and embedding models
+    accDescr: Graph stores PyDiGraph objects, which GraphEdges indexes. GraphEmbeddingDataset inherits from GraphEdges. EuclideanEmbedding and PoincareEmbedding both inherit the distance operations of _EdgeDistances.
+    class Graph {
+        full_graph
+        subgraph
+    }
+    class PyDiGraph
+    class GraphEdges {
+        concept_ids
+        edges_list
+    }
+    class GraphEmbeddingDataset {
+        candidate_nodes()
+    }
+    class _EdgeDistances {
+        forward()
+    }
+    class EuclideanEmbedding {
+        coordinates()
+    }
+    class PoincareEmbedding {
+        coordinates()
+    }
+    Graph --> PyDiGraph : stores
+    GraphEdges ..> PyDiGraph : indexes
+    GraphEdges <|-- GraphEmbeddingDataset
+    _EdgeDistances <|-- EuclideanEmbedding
+    _EdgeDistances <|-- PoincareEmbedding
+```
