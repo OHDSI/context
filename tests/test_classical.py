@@ -244,3 +244,51 @@ def test_euclidean_method_rejects_incompatible_geometry():
         _validate(setup("node2vec", geometry="hyperbolic"))
     with pytest.raises(ValueError, match="ancestor_mix"):
         _validate(setup("ancestor", ancestor_mix=1.1))
+
+
+def test_order_embeddings_preserve_every_parent_and_can_separate_incomparables(tmp_path):
+    data = sample()
+    model, _ = fit_classical(data, setup("order", embedding_dim=40), 0, tmp_path)
+    points = model.coordinates().detach().numpy()
+    sources, targets = data.edges_list.numpy().T
+    assert np.all(points[sources] < points[targets])
+    assert np.any(points[1] < points[2]) and np.any(points[2] < points[1])
+    assert np.all(points[0] < points[4])
+
+
+def test_graph_autoencoder_matches_dense_encoder_and_excludes_known_pairs():
+    from context.autoencoder import GraphAutoencoder, ReconstructionPairs, normalized_graph
+    a = sample().adjacency(False)
+    stripped = a.toarray().astype(float)
+    raw = stripped + np.eye(len(stripped))
+    inv = 1 / np.sqrt(raw.sum(axis=1))
+    normalized = torch.tensor(raw * inv[:, None] * inv[None, :], dtype=torch.float32)
+    graph = normalized_graph(a)
+    torch.testing.assert_close(graph.to_dense(), normalized)
+    model = GraphAutoencoder(a.shape[0], 5, 3)
+    expected = normalized @ (torch.relu(normalized @ model.node_weights) @ model.projection)
+    torch.testing.assert_close(model(graph), expected)
+    sampler = ReconstructionPairs(a)
+    positives, negatives = sampler.draw(np.random.default_rng(1), 4, 3000)
+    assert len(positives) == 4 and np.all(stripped[tuple(positives.T)] == 1)
+    observed = {tuple(pair) for pair in negatives}
+    assert observed == {(i, j) for i in range(len(raw)) for j in range(len(raw)) if i != j and stripped[i,j] == 0}
+
+
+def test_graph_autoencoder_checkpoint_continuation(tmp_path, graph_file, monkeypatch):
+    from context import autoencoder
+    args = setup("graph_autoencoder", graph_file=str(graph_file), graph_id="full", root_node_label=0,
+                 output_directory=str(tmp_path), experiment_id="complete", gae_epochs=4, gae_edge_budget=5, eval_interval=0)
+    train(args)
+    original = autoencoder.atomic_save
+    def interrupt(payload, path):
+        original(payload, path)
+        raise InterruptedError("epoch persisted")
+    monkeypatch.setattr(autoencoder, "atomic_save", interrupt)
+    restarted = replace(args, experiment_id="restarted")
+    with pytest.raises(InterruptedError):
+        train(restarted)
+    monkeypatch.setattr(autoencoder, "atomic_save", original)
+    train(replace(restarted, resume=True))
+    a, b = [load_embedding(output_folder(x, "euclidean") / "embedding.pt")["embeddings"] for x in (args, restarted)]
+    torch.testing.assert_close(a, b, rtol=0, atol=0)

@@ -59,7 +59,7 @@ class Args:
     write_tsv: bool = field(default=True, metadata={"help": "Write projector TSV files alongside the ID-keyed tensor export."})
     threads: int | None = field(default=None, metadata={"help": "CPU threads used by PyTorch during fitting."})
     keep_eval_models: bool = field(default=True, metadata={"help": "Retain checkpoints from every scored epoch in addition to the selected model."})
-    training_method: Literal["sampled", "landmark", "random", "adjacency_svd", "laplacian", "fastrp", "ancestor", "hope", "deepwalk", "node2vec"] = "sampled"
+    training_method: Literal["sampled", "landmark", "random", "adjacency_svd", "laplacian", "fastrp", "ancestor", "hope", "deepwalk", "node2vec", "order", "graph_autoencoder"] = "sampled"
     landmarks: int | None = field(default=None, metadata={"help": "Graph landmark budget. Default is max(64, 2 × embedding dimension + 1), capped at the number of concepts."})
     landmark_edge_length: float | None = field(default=None, metadata={"help": "Target distance per training-graph hop. By default use one for Euclidean and an automatically bounded length for hyperbolic space."})
     diffusion_steps: int = 3
@@ -77,3 +77,8 @@ class Args:
     walk_negatives: int = 5
     return_p: float = 1.0
     inout_q: float = 0.5
+    gae_hidden: int = 32
+    gae_epochs: int = 50
+    gae_lr: float = 0.01
+    gae_edge_budget: int = 32768
+    gae_negatives: int = 1

@@ -11,7 +11,7 @@ import torch
 from context.model import create_embedding
 
 
-METHODS = ("random", "adjacency_svd", "laplacian", "fastrp", "ancestor", "hope", "deepwalk", "node2vec")
+METHODS = ("random", "adjacency_svd", "laplacian", "fastrp", "ancestor", "hope", "deepwalk", "node2vec", "order", "graph_autoencoder")
 
 
 def validate_settings(args):
@@ -32,6 +32,9 @@ def validate_settings(args):
         raise ValueError("svd_iterations must be nonnegative")
     if method == "laplacian" and not (0 < args.spectral_tolerance < 1 and args.spectral_iterations > 0):
         raise ValueError("Laplacian fitting requires a positive iteration budget and tolerance in (0,1)")
+    if method == "graph_autoencoder" and (min(args.gae_epochs, args.gae_hidden, args.gae_edge_budget, args.gae_negatives) < 1
+                                        or not math.isfinite(args.gae_lr) or args.gae_lr <= 0):
+        raise ValueError("Graph autoencoder dimensions, learning rate, sampling budgets and epochs must be positive")
     if method in ("deepwalk", "node2vec"):
         from context.walks import validate_walk_settings
         validate_walk_settings(args)
@@ -119,16 +122,37 @@ def _svd(operator, rank, seed, iterations):
     return left * scale, right * scale
 
 
+def _directed_graph(n, sources, targets):
+    graph = rx.PyDiGraph(multigraph=False)
+    graph.add_nodes_from(range(n))
+    for start in range(0, len(sources), 32768):
+        block = slice(start, start + 32768)
+        graph.add_edges_from_no_data(list(zip(sources[block], targets[block])))
+    return graph
+
+
+def order_coordinates(dataset, args):
+    adjacency = dataset.adjacency(True)
+    graph = _directed_graph(dataset.num_nodes, *adjacency.nonzero())
+    if not rx.is_directed_acyclic_graph(graph):
+        raise ValueError("Topological rank coordinates require an acyclic graph")
+    rng = np.random.default_rng(args.seed)
+    ranks = np.arange(dataset.num_nodes, dtype=np.float64) / max(1, dataset.num_nodes - 1)
+    points = np.empty((dataset.num_nodes, args.embedding_dim), dtype=np.float32)
+    for axis in range(args.embedding_dim):
+        priority = rng.permutation(dataset.num_nodes)
+        ordered = rx.lexicographical_topological_sort(graph, key=lambda row: str(priority[row]))
+        points[ordered, axis] = ranks
+    return points, {"algorithm": "random-priority topological rank coordinates", "direction": "parent_to_child",
+                    "linear_extensions": args.embedding_dim, "coordinate_range_before_centering": [0, 1]}
+
+
 def katz_operator(adjacency, beta):
     n = adjacency.shape[0]
     sources, targets = adjacency.nonzero()
     order = np.arange(n)
     if np.any(sources >= targets):
-        graph = rx.PyDiGraph(multigraph=False)
-        graph.add_nodes_from(range(n))
-        for start in range(0, len(sources), 32768):
-            block = slice(start, start + 32768)
-            graph.add_edges_from_no_data(list(zip(sources[block], targets[block])))
+        graph = _directed_graph(n, sources, targets)
         try:
             order = np.asarray(rx.topological_sort(graph), dtype=np.intp)
         except rx.DAGHasCycle as error:
@@ -197,6 +221,11 @@ def fit_classical(dataset, args, root, stage):
         details = {"algorithm": "Gaussian concept-ID control", "uses_edges_for_coordinates": False}
     elif method in ("fastrp", "ancestor"):
         points, details = diffusion(dataset, args)
+    elif method == "order":
+        points, details = order_coordinates(dataset, args)
+    elif method == "graph_autoencoder":
+        from context.autoencoder import autoencoder_coordinates
+        points, details = autoencoder_coordinates(dataset, args, stage)
     elif method == "laplacian":
         points, details = laplacian_coordinates(dataset.adjacency(False), args)
     elif method in ("deepwalk", "node2vec"):
