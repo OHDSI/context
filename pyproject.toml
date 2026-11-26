@@ -1,6 +1,6 @@
 [project]
 name = "context"
-version = "2026.11.26a4"
+version = "2026.11.26a5"
 description = "A python library to embed knowledge graphs for context-aware prediction modeling."
 readme = "README.md"
 license = { file = "LICENSE" }

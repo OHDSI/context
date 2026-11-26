@@ -88,6 +88,15 @@ uv run --frozen python -m context.controls --source output/taxonomy/node2vec/euc
 
 [Laplacian Eigenmaps](https://papers.nips.cc/paper_files/paper/2001/hash/f106b7f99d2cb30c3db1c3cc0fde9ccb-Abstract.html) · [Randomized SVD](https://arxiv.org/abs/0909.4061) · [FastRP](https://arxiv.org/abs/1908.11512) · [HOPE](https://www.kdd.org/kdd2016/papers/files/rfp0184-ouA.pdf) · [DeepWalk](https://arxiv.org/abs/1403.6652) · [node2vec](https://arxiv.org/abs/1607.00653).
 
+## Check a supplied SNOMED vocabulary
+
+The optional integration test reads the two OMOP vocabulary tables, checks every active concept and direct `Is a` edge against an independent SQL query, and verifies the concept IDs and coordinates exported by each method. Use a private temporary directory for the graph and weights. The short settings exercise package behavior.
+
+```sh
+CONTEXT_SNOMED_VOCABULARY=/path/to/authorized/vocabulary \
+  uv run --frozen --extra walks pytest -q tests/test_snomed_vocabulary.py
+```
+
 ## Graph inputs
 
 - **SNOMED Is a.** Supply the tab-delimited OMOP `CONCEPT` and `CONCEPT_RELATIONSHIP` files and a CSV with one `conceptId` column. Active, standard SNOMED endpoints and active child-to-parent `Is a` rows define the taxonomy. The graph stores parent-to-child edges and retains intermediate nodes and multiple paths from covered seeds to the chosen root. In the saved graph, `Graph.load(path).extraction` records coverage and exclusions. The default root is OMOP concept 441840, Clinical finding.
