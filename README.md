@@ -1,6 +1,6 @@
 # OHDSI/context
 
-Train concept embeddings from a clinical taxonomy in Euclidean space or a Poincaré ball. Both models use the same concept rows, graph edges, conditional negative sampler and training objective. The default geometry is hyperbolic.
+Train concept embeddings from a clinical taxonomy in Euclidean space or a Poincaré ball. The default trainer learns to rank observed neighbors against sampled alternatives. A second trainer fits shortest-path distances to landmarks. Both support the same graph, concept IDs and geometry-aware exports. The default geometry is hyperbolic.
 
 ## Train both geometries on one graph
 
@@ -23,13 +23,31 @@ The dimension and learning rate illustrate the interface. Select them for the in
 | Updates | PyTorch SGD or Adam | hypll Riemannian SGD or Adam |
 | Output for experiment `taxonomy` | `output/taxonomy/euclidean/` | `output/taxonomy/` (original location) |
 
-`both` builds or loads one graph, resolves labels once, and fits each geometry using the same shuffled positive edges and negative draws at corresponding epochs. By default both anchor the designated root at zero. Euclidean vectors are learned directly. The curvature option applies to the Poincaré fit.
+With the default sampled trainer, `both` builds or loads one graph, resolves labels once, and fits each geometry using the same shuffled positive edges and negative draws at corresponding epochs. By default both anchor the designated root at zero. Euclidean vectors are learned directly. The curvature option applies to the Poincaré fit.
 
 ### Euclidean root placement
 
 The graph root selects which SNOMED descendants belong in the taxonomy. Use `--euclidean_root trainable` to fit its Euclidean vector along with the other concept vectors. Both policies start the root at zero. On PyTorch 2.5.1 the Apple MPS backend needs an explicit gradient mask to keep a fixed root there. The Poincaré fit in `--geometry both` keeps its named root anchored. Trainable-root Euclidean outputs go in `euclidean/trainable-root/`, so both Euclidean fits can share an experiment and graph.
 
 For a Euclidean artifact with a named root, `vectors - vectors[artifact["graph_root_index"]]` places it at the origin after training and preserves all L2 distances up to rounding. `graph_root_index` identifies the named node. The existing `root_index` field identifies a frozen row and is null for a trainable root. Apply a chosen coordinate convention consistently when training and using a downstream model that consumes raw vectors. Parent–child direction is available from the graph.
+
+## Fit from landmark distances
+
+Use this option when you want the coordinates to reflect how many taxonomy steps separate concepts. Each landmark measures shortest-path distance to every concept, including paths through any of a concept’s parents. Euclidean landmark multidimensional scaling and hyperbolic L-hydra project those measurements into vectors. They use spectral factorization and require no negative samples or training epochs. [Euclidean landmark MDS](https://graphics.stanford.edu/courses/cs468-05-winter/Papers/Landmarks/Silva_landmarks5.pdf) · [Hyperbolic L-hydra](https://arxiv.org/abs/2207.06775)
+
+```sh
+uv run --frozen python -m context --graph_file graph.pkl --graph_id ancestral \
+  --root_node_label 441840 --training_method landmark --geometry both \
+  --embedding_dim 16 --landmarks 64 --device cpu --seed 41 \
+  --output_directory output --experiment_id taxonomy --eval_interval 0
+```
+
+The Poincaré table goes to `output/taxonomy/landmark/embedding.pt` and the Euclidean table to `output/taxonomy/landmark/euclidean/embedding.pt`. Use `--training_method sampled` for the original neighbor-ranking objective. The two trainers can share the graph and experiment directory. Epochs, negatives, optimizer and burn-in apply to sampled training. For landmark fitting, a positive `eval_interval` requests one retrieval evaluation. Both geometries reuse the same CPU shortest paths when requested together. Completed geometries can be reused with `--resume true`. An interrupted distance calculation starts again, and a fully staged export can finish publication without recomputing.
+
+- **Graph and direction.** Fitting uses undirected hop distance on training links. It captures proximity. Parent and child retrieval can still be scored separately on held-out directed links. For a disconnected forest, a temporary hub connects one representative per weak component, with preference for its named root or an in-degree-zero node. The hub adds two hops between component representatives and preserves all original within-component distances. Between-component distances follow this convention. The hub has no exported row.
+- **Origins and units.** The Poincaré fit moves the named root to the origin by an isometry. Euclidean fitting uses translation with `--euclidean_root fixed` and landmark-centered coordinates with `--euclidean_root trainable`. The default target is one unit per hop in Euclidean space. For Poincaré the default is the smaller of one and `6 / (sqrt(curvature) × maximum landmark hops)`, which limits the numerical range of the hyperbolic cosine. Override with a positive `--landmark_edge_length`. The actual length and effective curvature are saved.
+- **Resolution.** The first landmark is the named root when supplied. Farthest-point selection covers the graph, with ties resolved by the seed. The default budget is the smaller of the concept count and `max(64, 2 × embedding_dim + 1)`. More landmarks can distinguish additional branches. Identical landmark-distance profiles produce identical coordinates. The receipt records unique profiles, distinct exported vectors, the number of concepts sharing a vector, the largest such group and the effective spectral dimension. Rank-deficient graphs are zero-padded to retain the requested export width. Eigenvector orientation can vary with the numerical libraries.
+- **Scale and evaluation.** With *N* nodes and *L* landmarks the hop table holds *N × L* 32-bit integers. Only the *L × L* landmark matrix is factorized. Use `--write_tsv false` for tensor-only transfer. A validation split is applied before forming any landmark distances or links across components. Reciprocal edges are assigned to the same fold. Use the existing validation/refit workflow below to select the geometry and budget and then refit on all edges.
 
 ## Graph inputs
 

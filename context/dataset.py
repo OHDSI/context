@@ -1,3 +1,4 @@
+from copy import copy
 from functools import cached_property
 
 import numpy as np
@@ -7,26 +8,24 @@ import torch
 from torch.utils.data import Dataset, get_worker_info
 
 
-class GraphEmbeddingDataset(Dataset):
-    def __init__(self, graph: rx.PyDiGraph, device=torch.device("cpu"), num_negative_samples=10,
-                 directed=False, seed=None):
+class GraphEdges(Dataset):
+    def __init__(self, graph: rx.PyDiGraph, device=torch.device("cpu"), directed=False):
+        self.device = device
+        self.directed = directed
         indices = np.asarray(graph.node_indices(), dtype=np.int64)
         pairs = np.asarray(graph.edge_list(), dtype=np.int64).reshape(-1, 2)
         if len(indices) and indices[-1] != len(indices) - 1:
             pairs = np.searchsorted(indices, pairs)
-        self._initialize(list(graph.nodes()), pairs, device, num_negative_samples, directed, seed)
+        self._set_edges(list(graph.nodes()), pairs)
 
     def with_training_edges(self, edges):
-        dataset = type(self).__new__(type(self))
-        dataset._initialize(self.concept_ids, edges, self.device, self.num_negative_samples, self.directed, None)
+        dataset = copy(self)
+        for attribute in ("directed_adjacency_matrix", "undirected_adjacency_matrix"):
+            vars(dataset).pop(attribute, None)
+        dataset._set_edges(self.concept_ids, edges)
         return dataset
 
-    def _initialize(self, concept_ids, pairs, device, num_negative_samples, directed, seed):
-        self.device = device
-        self.directed = directed
-        self.num_negative_samples = num_negative_samples
-        if num_negative_samples < 1:
-            raise ValueError("At least one negative sample is required")
+    def _set_edges(self, concept_ids, pairs):
         self.concept_ids = concept_ids
         self.num_nodes = len(concept_ids)
         if len(set(concept_ids)) != self.num_nodes:
@@ -35,30 +34,16 @@ class GraphEmbeddingDataset(Dataset):
         if pairs.ndim != 2 or pairs.shape[1] != 2 or (pairs.size and (pairs.min() < 0 or pairs.max() >= self.num_nodes)):
             raise ValueError("Expected edges between existing concept rows")
         pairs = pairs[pairs[:, 0] != pairs[:, 1]]
-        if not len(pairs):
-            raise ValueError("The graph has no non-self edges")
         edge_keys = pairs[:, 0] * self.num_nodes + pairs[:, 1]
         unique_keys, first = np.unique(edge_keys, return_index=True)
         self._observed = pairs[np.sort(first)] if len(first) < len(pairs) else pairs
-        self.edges_list = torch.as_tensor(self._observed, dtype=torch.long, device=device)
+        self.edges_list = torch.as_tensor(self._observed, dtype=torch.long, device=self.device)
         self.num_edges = len(self._observed)
-        if not directed:
+        if not self.directed:
             reverse_keys = self._observed[:, 1] * self.num_nodes + self._observed[:, 0]
             unique_keys = np.union1d(unique_keys, reverse_keys)
         self.neighbor_rows = self._neighbor_index(unique_keys)
-        positives = self._observed if directed else np.column_stack(divmod(unique_keys, self.num_nodes))
-        node_rows = np.arange(self.num_nodes, dtype=np.int64)
-        blocked_keys = np.union1d(unique_keys, node_rows * (self.num_nodes + 1))
-        blocked_counts = np.diff(self.neighbor_rows.indptr).astype(np.int64) + 1
-        self._blocked_offsets = blocked_counts.cumsum() - blocked_counts
-        self._available_counts = self.num_nodes - blocked_counts
-        within_row = np.arange(len(blocked_keys)) - np.repeat(self._blocked_offsets, blocked_counts)
-        self._complement_thresholds = blocked_keys % self.num_nodes - within_row
-        self._global_thresholds = blocked_keys - within_row
-        self._positives = positives[self._available_counts[positives[:, 0]] > 0]
-        self.skipped_positives = len(positives) - len(self._positives)
-        self._rng = np.random.default_rng(seed)
-        self._worker_id = None
+        return unique_keys
 
     def _neighbor_index(self, sorted_keys):
         source_rows, target_rows = divmod(sorted_keys, self.num_nodes)
@@ -77,10 +62,6 @@ class GraphEmbeddingDataset(Dataset):
 
     def __len__(self):
         return self.num_edges
-
-    @property
-    def training_size(self):
-        return len(self._positives)
 
     def create_sparse_adjacency_matrix(self, directed):
         indices = self.edges_list.T
@@ -104,6 +85,39 @@ class GraphEmbeddingDataset(Dataset):
             if not directed:
                 adjacency[target].add(source)
         return adjacency
+
+
+class GraphEmbeddingDataset(GraphEdges):
+    def __init__(self, graph: rx.PyDiGraph, device=torch.device("cpu"), num_negative_samples=10,
+                 directed=False, seed=None):
+        if num_negative_samples < 1:
+            raise ValueError("At least one negative sample is required")
+        self.num_negative_samples = num_negative_samples
+        self._seed = seed
+        super().__init__(graph, device=device, directed=directed)
+        self._seed = None
+
+    def _set_edges(self, concept_ids, pairs):
+        unique_keys = super()._set_edges(concept_ids, pairs)
+        if not self.num_edges:
+            raise ValueError("The graph has no non-self edges")
+        positives = self._observed if self.directed else np.column_stack(divmod(unique_keys, self.num_nodes))
+        node_rows = np.arange(self.num_nodes, dtype=np.int64)
+        blocked_keys = np.union1d(unique_keys, node_rows * (self.num_nodes + 1))
+        blocked_counts = np.diff(self.neighbor_rows.indptr).astype(np.int64) + 1
+        self._blocked_offsets = blocked_counts.cumsum() - blocked_counts
+        self._available_counts = self.num_nodes - blocked_counts
+        within_row = np.arange(len(blocked_keys)) - np.repeat(self._blocked_offsets, blocked_counts)
+        self._complement_thresholds = blocked_keys % self.num_nodes - within_row
+        self._global_thresholds = blocked_keys - within_row
+        self._positives = positives[self._available_counts[positives[:, 0]] > 0]
+        self.skipped_positives = len(positives) - len(self._positives)
+        self._rng = np.random.default_rng(self._seed)
+        self._worker_id = None
+
+    @property
+    def training_size(self):
+        return len(self._positives)
 
     def sample_negative_uniform(self, batch_size):
         return torch.randint(self.num_nodes, (batch_size * self.num_negative_samples,), device=self.device)

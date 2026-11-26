@@ -32,10 +32,13 @@ class GraphPartition:
 def split_edges(dataset, args):
     edges = dataset.edges_list.cpu().numpy()
     source, target = edges.T
-    if not args.directed:
-        keys = np.minimum(source, target) * dataset.num_nodes + np.maximum(source, target)
+    keys = source * dataset.num_nodes + target
+    reverse = target * dataset.num_nodes + source
+    if args.directed:
+        reciprocal = np.isin(reverse, keys)
+        keys[reciprocal] = np.minimum(keys[reciprocal], reverse[reciprocal])
     else:
-        keys = source * dataset.num_nodes + target
+        keys = np.minimum(keys, reverse)
     groups, group_for_edge = np.unique(keys, return_inverse=True)
     count = max(1, int(len(groups) * args.validation_fraction))
     if len(groups) <= 2 * count:

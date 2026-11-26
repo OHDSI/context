@@ -21,14 +21,24 @@ def fit_identity(args, graph_digest, fixed_rates, selection_identity):
     payload = {"settings": settings, "graph_sha256": graph_digest, "fixed_rates": fixed_rates,
                "selection": selection_identity, "source_sha256": implementation.hexdigest(),
                "torch": str(torch.__version__), "threads": args.threads or torch.get_num_threads()}
+    if args.training_method == "landmark":
+        import numpy
+        import scipy
+        payload["numpy"] = numpy.__version__
+        payload["scipy"] = scipy.__version__
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
 def matching_stage(destination, identity):
-    candidates = [stage for stage in destination.glob(".context-fit-*")
-                  if (stage / "identity").is_file() and (stage / "identity").read_text() == identity
-                  and (stage / "progress.pt").is_file()]
-    return max(candidates, key=lambda stage: (stage / "progress.pt").stat().st_mtime_ns, default=None)
+    candidates = []
+    for stage in destination.glob(".context-fit-*"):
+        if (stage / "identity").is_file() and (stage / "identity").read_text() == identity:
+            for name in ("training.json", "progress.pt"):
+                record = stage / name
+                if record.is_file():
+                    candidates.append((record.stat().st_mtime_ns, stage))
+                    break
+    return max(candidates)[1] if candidates else None
 
 
 def new_stage(destination, identity):

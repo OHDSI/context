@@ -59,3 +59,6 @@ class Args:
     write_tsv: bool = field(default=True, metadata={"help": "Write projector TSV files alongside the ID-keyed tensor export."})
     threads: int | None = field(default=None, metadata={"help": "CPU threads used by PyTorch during fitting."})
     keep_eval_models: bool = field(default=True, metadata={"help": "Retain checkpoints from every scored epoch in addition to the selected model."})
+    training_method: Literal["sampled", "landmark"] = field(default="sampled", metadata={"help": "Sampled neighbor ranking or distance-based landmark fitting."})
+    landmarks: int | None = field(default=None, metadata={"help": "Graph landmark budget. Default is max(64, 2 × embedding dimension + 1), capped at the number of concepts."})
+    landmark_edge_length: float | None = field(default=None, metadata={"help": "Target distance per training-graph hop. By default use one for Euclidean and an automatically bounded length for hyperbolic space."})

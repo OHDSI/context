@@ -10,7 +10,7 @@ import torch
 from filelock import FileLock
 
 from context.args import Args
-from context.dataset import GraphEmbeddingDataset
+from context.dataset import GraphEdges, GraphEmbeddingDataset
 from context.eval import evaluate_model
 from context.export import concept_labels, export_embedding, file_sha, load_model, save_checkpoint
 from context.graph import Graph
@@ -24,6 +24,8 @@ from context.selection import split_edges
 
 def output_folder(args, geometry):
     folder = Path(args.output_directory) / args.experiment_id
+    if getattr(args, "training_method", "sampled") == "landmark":
+        folder /= "landmark"
     if geometry == "euclidean":
         folder = folder / "euclidean"
         if getattr(args, "euclidean_root", "fixed") == "trainable":
@@ -49,19 +51,19 @@ def _validate(args):
         raise ValueError(f"Unknown geometry {args.geometry!r}")
     if args.euclidean_root not in ("fixed", "trainable"):
         raise ValueError("euclidean_root must be fixed or trainable")
-    if args.optimizer not in ("sgd", "adam"):
-        raise ValueError(f"Unknown optimizer {args.optimizer!r}")
-    if min(args.epochs, args.save_top, args.batch_size, args.embedding_dim, args.negative_samples) < 1:
-        raise ValueError("epochs, save_top, batch_size, embedding_dim and negative_samples must be positive")
-    if not math.isfinite(args.learning_rate) or args.learning_rate <= 0:
-        raise ValueError("learning_rate must be finite and positive")
-    if args.burn_in and (args.burn_in_epochs < 0 or not math.isfinite(args.burn_in_lr_divisor)
-                         or args.burn_in_lr_divisor <= 0):
-        raise ValueError("Invalid burn-in schedule")
-    if args.eval_interval < 0 or args.lr_reduce_patience < 0 or args.early_stop_patience < 1:
-        raise ValueError("Invalid evaluation interval or patience")
-    if not 0 < args.lr_reduce_factor < 1:
-        raise ValueError("lr_reduce_factor must lie between zero and one")
+    if args.training_method == "landmark":
+        if (args.landmarks is not None and args.landmarks < 2) or args.embedding_dim < 1:
+            raise ValueError("Landmark fitting requires at least two landmarks and a positive embedding dimension")
+        if args.landmark_edge_length is not None and (not math.isfinite(args.landmark_edge_length) or args.landmark_edge_length <= 0):
+            raise ValueError("landmark_edge_length must be finite and positive")
+        if str(args.device) != "cpu":
+            raise ValueError("Landmark shortest paths and spectral fitting run on CPU. Use --device cpu.")
+    elif args.training_method == "sampled":
+        _validate_sampled(args)
+    else:
+        raise ValueError("Expected sampled or landmark training")
+    if args.eval_interval < 0:
+        raise ValueError("Invalid evaluation interval")
     if not 0 <= args.validation_fraction < .5 or (args.validation_fraction and not args.eval_interval):
         raise ValueError("Validation and test fractions must be below .5 and require a positive evaluation interval")
     if args.taxonomy_scope not in ("seeds", "subtree", "all"):
@@ -80,6 +82,22 @@ def _validate(args):
         raise ValueError("Explicit parent/child retrieval requires a held-out edge split")
     if not args.model_file or Path(args.model_file).name != args.model_file:
         raise ValueError("model_file must be a filename")
+
+
+def _validate_sampled(args):
+    if args.optimizer not in ("sgd", "adam"):
+        raise ValueError(f"Unknown optimizer {args.optimizer!r}")
+    if min(args.epochs, args.save_top, args.batch_size, args.embedding_dim, args.negative_samples) < 1:
+        raise ValueError("epochs, save_top, batch_size, embedding_dim and negative_samples must be positive")
+    if not math.isfinite(args.learning_rate) or args.learning_rate <= 0:
+        raise ValueError("learning_rate must be finite and positive")
+    if args.burn_in and (args.burn_in_epochs < 0 or not math.isfinite(args.burn_in_lr_divisor)
+                         or args.burn_in_lr_divisor <= 0):
+        raise ValueError("Invalid burn-in schedule")
+    if args.lr_reduce_patience < 0 or args.early_stop_patience < 1:
+        raise ValueError("Invalid evaluation interval or patience")
+    if not 0 < args.lr_reduce_factor < 1:
+        raise ValueError("lr_reduce_factor must lie between zero and one")
 
 
 def _args_with_defaults(args):
@@ -154,13 +172,16 @@ def _train_geometries(args, fixed_rates, selection_identity):
         if selection_identity and selection_identity.get("graph_sha256", graph_digest) != graph_digest:
             raise ValueError("Refit requires the graph used for selection")
         subgraph = graph.full_graph if args.graph_id == "full" else graph.subgraph[args.graph_id]
-        dataset = GraphEmbeddingDataset(subgraph, directed=args.directed, num_negative_samples=args.negative_samples)
+        if args.training_method == "landmark":
+            dataset = GraphEdges(subgraph, directed=args.directed)
+        else:
+            dataset = GraphEmbeddingDataset(subgraph, directed=args.directed, num_negative_samples=args.negative_samples)
         del graph, subgraph
         partition = None
         if args.validation_fraction:
             partition = split_edges(dataset, args)
             dataset = dataset.with_training_edges(partition.training)
-        if not dataset.training_size:
+        if args.training_method == "sampled" and not dataset.training_size:
             raise ValueError("No source with a positive edge has an eligible negative neighbor")
         root = None
         if args.root_node_label is not None:
@@ -172,32 +193,81 @@ def _train_geometries(args, fixed_rates, selection_identity):
         label_digest = file_sha(args.concept_map) if args.concept_map else None
         geometries = ("hyperbolic", "euclidean") if args.geometry == "both" else (args.geometry,)
         records = []
+        basis = None
         for geometry in geometries:
             settings = geometry_settings(args, geometry)
             destination = output_folder(settings, geometry)
             destination.mkdir(parents=True, exist_ok=True)
             identity = fit_identity(settings, graph_digest, fixed_rates, {"selection": selection_identity, "labels": label_digest})
             stage = matching_stage(destination, identity) if args.resume else None
-            if args.resume and stage is None:
-                cached = completed_records(destination, identity)
+            if args.resume:
+                cached = completed_records(stage if stage is not None else destination, identity)
                 if cached is not None:
+                    if stage is not None:
+                        _publish(stage, destination, settings.model_file)
+                        shutil.rmtree(stage)
                     records.extend(cached)
                     continue
-                if (destination / "training.json").exists() or any(destination.glob(".context-fit-*/progress.pt")):
+                if stage is None and ((destination / "training.json").exists() or any(destination.glob(".context-fit-*/progress.pt"))):
                     raise ValueError("No saved run matches the graph, settings and implementation")
             if stage is None:
                 stage = new_stage(destination, identity)
             try:
-                records.extend(_fit(settings, dataset, root, labels, stage, graph_digest, partition, fixed_rates, selection_identity))
+                if settings.training_method == "landmark":
+                    from context.landmarks import landmark_distances
+                    if basis is None:
+                        budget = settings.landmarks or max(64, 2 * settings.embedding_dim + 1)
+                        basis = landmark_distances(dataset, root, budget, settings.seed)
+                    fitted = _fit_landmarks(settings, dataset, basis, root, labels, stage, graph_digest, partition, selection_identity)
+                else:
+                    fitted = _fit(settings, dataset, root, labels, stage, graph_digest, partition, fixed_rates, selection_identity)
+                records.extend(fitted)
                 _publish(stage, destination, settings.model_file)
             except BaseException:
-                if (stage / "progress.pt").exists() or any((stage / "models").glob("*.pt")):
+                if (stage / "training.json").exists() or (stage / "progress.pt").exists() or any((stage / "models").glob("*.pt")):
                     print(f"Partial checkpoints retained in {stage}", flush=True)
                 else:
                     shutil.rmtree(stage)
                 raise
             shutil.rmtree(stage)
         return records
+
+
+def _fit_landmarks(args, dataset, basis, root, labels, stage, graph_digest, partition, selection_identity):
+    from context.landmarks import fit_coordinates
+    model, details = fit_coordinates(basis, args, root)
+    scope = "held_out_edge_selection" if partition else ("full_graph_refit" if selection_identity else "full_graph_reconstruction")
+    provenance = {"training_method": "landmark", "graph_sha256": graph_digest, "training_scope": scope,
+                  "selection_identity": selection_identity, "seed": args.seed, **details}
+    records, counts = [], {}
+    if partition:
+        np.savez(stage / "partitions.npz", train=partition.training, validation=partition.validation, test=partition.test)
+        provenance["split_sha256"] = file_sha(stage / "partitions.npz")
+        metrics = partition.score(model, "validation")
+        counts = {"validation_edges": len(partition.validation), "test_edges": len(partition.test),
+                  "best_validation_ap": metrics["macro_average_precision"], "test": partition.score(model, "test"),
+                  "nodes_without_training_edges": dataset.num_nodes - len(np.unique(partition.training))}
+    elif args.eval_interval and dataset.num_edges:
+        rank, ap = evaluate_model(model, dataset, query_limit=args.eval_queries, query_seed=args.query_seed)
+        eligible = int(np.count_nonzero(np.diff(dataset.neighbor_rows.indptr)))
+        metrics = {"mean_rank": rank, "macro_average_precision": ap, "eligible_queries": eligible,
+                   "queries": min(eligible, args.eval_queries or eligible), "candidates": dataset.num_nodes}
+    else:
+        metrics = None
+    if metrics is not None:
+        records.append({**vars(args), **metrics, "evaluation_scope": "validation" if partition else "reconstruction",
+                        "map_score": metrics["macro_average_precision"], "epoch": None})
+        pl.DataFrame(records).write_csv(stage / "eval_metrics.csv")
+    export_embedding(stage, model, dataset.concept_ids, labels, None, graph_root_index=root,
+                     provenance=provenance, write_tsv=args.write_tsv)
+    files = ["embedding.pt", "embedding.json", "vec.tsv", "labels.tsv", "eval_metrics.csv", "partitions.npz"]
+    total_edges = dataset.num_edges + (len(partition.validation) + len(partition.test) if partition else 0)
+    summary = {"settings": vars(args), **provenance, **counts, "selected_epoch": None,
+               "training_loss": [], "learning_rates": [], "nodes": dataset.num_nodes, "graph_edges": total_edges,
+               "training_edges": dataset.num_edges, "evaluation_records": records, "fit_identity": (stage / "identity").read_text(),
+               "output_sha256": {name: file_sha(stage / name) for name in files if (stage / name).exists()}}
+    (stage / "training.json").write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n")
+    return records
 
 
 def _fit(args, dataset, root, labels, stage, graph_digest, partition=None, fixed_rates=None, selection_identity=None):
@@ -315,7 +385,7 @@ def _fit(args, dataset, root, labels, stage, graph_digest, partition=None, fixed
         best_path = next(path for _, epoch, path in kept if epoch == best_epoch)
     selected = load_model(best_path)
     mode = "held_out_edge_selection" if partition else ("full_graph_refit" if fixed_rates else "full_graph_reconstruction")
-    provenance = {"graph_sha256": graph_digest, "training_scope": mode, "seed": args.seed,
+    provenance = {"training_method": "sampled", "graph_sha256": graph_digest, "training_scope": mode, "seed": args.seed,
                   "selection_identity": selection_identity}
     split_counts = {}
     if partition:
